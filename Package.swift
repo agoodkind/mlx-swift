@@ -120,7 +120,6 @@ let cmlx = Target.target(
         "json",
 
         // vendored library
-        "fmt/test",
         "fmt/doc",
         "fmt/support",
         "fmt/src/os.cc",

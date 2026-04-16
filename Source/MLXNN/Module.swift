@@ -284,9 +284,6 @@ open class Module {
                     }
                 }
                 return isAllNone ? .none : .array(result)
-
-            default:
-                fatalError("Unexpected leaf \(vk) = \(v)")
             }
         }
 
@@ -1399,8 +1396,8 @@ public enum ModuleValue {
         get {
             // note: this gives a warning but it does in fact do something
             // in the case where this is e.g. ParameterInfo<MLXArray?>
-            if let value = value as? T {
-                return value
+            if let v = (value as Any) as? T {
+                return v
             } else {
                 return value!
             }
@@ -1512,8 +1509,8 @@ private protocol TypeErasedSetterProvider {
         get {
             // note: this gives a warning but it does in fact do something
             // in the case where this is e.g. ModuleInfo<Linear?>
-            if let module = module as? T {
-                return module
+            if let m = (module as Any) as? T {
+                return m
             } else {
                 return module!
             }

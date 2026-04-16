@@ -115,7 +115,7 @@ constant float TURBO_QJL_CONST = 1.2533141373155003f; // sqrt(pi/2)
 // rnorm:              residual L2 scale
 // out[128]:           reconstructed float vector
 // ---------------------------------------------------------------------------
-static void turbo_dequant_k(
+[[maybe_unused]] static void turbo_dequant_k(
     const device uchar * packed_indices,
     const device uchar * qjl_signs,
     float norm,
@@ -146,7 +146,7 @@ static void turbo_dequant_k(
 // ---------------------------------------------------------------------------
 // Dequantize a TurboQuantV vector (3-bit PolarQuant only — V-cache)
 // ---------------------------------------------------------------------------
-static void turbo_dequant_v(
+[[maybe_unused]] static void turbo_dequant_v(
     const device uchar * packed_indices,
     float norm,
     thread float * out)

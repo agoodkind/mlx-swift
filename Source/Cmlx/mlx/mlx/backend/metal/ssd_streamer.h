@@ -30,7 +30,6 @@ public:
     SSDStreamer& operator=(const SSDStreamer&) = delete;
 
     /**
-    /**
      * Dispatch an asynchronous GCD POSIX read from the safetensors file descriptor.
      * @param byte_offset The offset into the .safetensors file.
      * @param length The number of bytes to read

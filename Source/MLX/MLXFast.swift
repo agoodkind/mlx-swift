@@ -335,7 +335,7 @@ public enum MLXFast {
     ) -> MLXArray {
         var result = mlx_array_new()
         
-        safetensorsPath.withCString { pathPtr in
+        _ = safetensorsPath.withCString { pathPtr in
             tensorName.withCString { namePtr in
                 mlx_fast_streamed_gather_mm(
                     &result,
@@ -383,7 +383,7 @@ public enum MLXFast {
         tensorName: String,
         expertIndex: UInt32
     ) {
-        safetensorsPath.withCString { pathPtr in
+        _ = safetensorsPath.withCString { pathPtr in
             tensorName.withCString { namePtr in
                 mlx_fast_submit_prefetch(pathPtr, namePtr, expertIndex)
             }
