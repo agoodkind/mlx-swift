@@ -420,6 +420,27 @@ public enum MLXFast {
         mlx_fast_set_prefetch_enabled(enabled)
     }
 
+    /// Convert an array of raw FP8 E4M3 bytes (stored as uint8 by safetensors loader)
+    /// to the specified floating point dtype using proper FP8 E4M3 semantics.
+    ///
+    /// MLX's safetensors loader maps `F8_E4M3` → `uint8` (raw bit patterns).
+    /// Use this before applying block-wise scale_inv to dequantize FP8 weights correctly.
+    ///
+    /// - Parameters:
+    ///   - x: uint8 array containing raw FP8 E4M3 bit patterns
+    ///   - dtype: target floating-point dtype (e.g. `.bfloat16`, `.float16`, `.float32`)
+    ///   - stream: stream or device to evaluate on
+    /// - Returns: Array in the requested dtype with correctly converted FP8 values
+    public static func fromFp8(
+        _ x: MLXArray, dtype: DType = .bfloat16, stream: StreamOrDevice = .default
+    ) -> MLXArray {
+        precondition(x.dtype == .uint8, "FP8 input must be uint8 bit patterns")
+        precondition(dtype == .bfloat16 || dtype == .float16 || dtype == .float32, "Target dtype must be a floating point type")
+        var result = mlx_array_new()
+        mlx_from_fp8(&result, x.ctx, dtype.cmlxDtype, stream.ctx)
+        return MLXArray(result)
+    }
+
 }
 
 /// Optimized implementation of `NN.RoPE`.
