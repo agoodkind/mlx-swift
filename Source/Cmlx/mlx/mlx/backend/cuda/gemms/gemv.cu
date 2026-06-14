@@ -167,7 +167,7 @@ __global__ void gemv_gather(
 }
 
 bool can_use_gemv(int M, int N, int K, bool a_transposed, bool b_transposed) {
-  return K % 32 == 0 && ((M == 1 && b_transposed) || (N == 1 && !a_transposed));
+  return (M == 1 && b_transposed) || (N == 1 && !a_transposed);
 }
 
 template <typename F>
@@ -236,7 +236,6 @@ void gemv(
             kernel,
             num_blocks_x,
             block_dims,
-            0,
             mat,
             vec,
             gpu_ptr<DataType>(out),
@@ -248,7 +247,6 @@ void gemv(
             kernel,
             dim3{num_blocks_x, batch_count},
             block_dims,
-            0,
             mat,
             vec,
             gpu_ptr<DataType>(out),
@@ -302,7 +300,6 @@ void gather_mv(
           kernel,
           dim3{num_blocks_x, batch_size},
           block_dims,
-          0,
           mat,
           vec,
           gpu_ptr<DataType>(out),

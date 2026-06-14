@@ -30,7 +30,7 @@ template <typename T, int N>
     out_pixels *= params->oS[i];
 
   // Set out
-  out += gid.z * filter_size + gid.y * (params->C);
+  out += (size_t)gid.z * filter_size + (size_t)gid.y * (params->C);
 
   // Coordinates in input
   int is[N] = {0};
@@ -93,7 +93,8 @@ template <typename T, int N>
     out_pixels *= params->oS[i];
 
   // Set out
-  out += gid.z * filter_size + gid.x * (filter_size / params->C);
+  out +=
+      (size_t)gid.z * filter_size + (size_t)gid.x * (filter_size / params->C);
 
   // Coordinates in input
   int is[N] = {0};
@@ -205,7 +206,7 @@ template <typename T>
 
   threadgroup T ins[TGH * TGW * TGC];
 
-  const int n_tgblocks_h = params.oS[0] / th;
+  const int n_tgblocks_h = (params.oS[0] + th - 1) / th;
   const int n = tid.z / n_tgblocks_h;
   const int tghid = tid.z % n_tgblocks_h;
   const int oh = tghid * th + lid.z;
@@ -275,6 +276,10 @@ template <typename T>
     }
   }
   threadgroup_barrier(mem_flags::mem_none);
+
+  if (oh >= params.oS[0] || ow >= params.oS[1]) {
+    return;
+  }
 
   out += n * params.out_strides[0] + oh * params.out_strides[1] +
       ow * params.out_strides[2];

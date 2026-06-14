@@ -511,7 +511,6 @@ void sdpa_vector_1pass_fallback(
             kernel,
             grid_dim,
             block_dim,
-            0,
             gpu_ptr<DataType>(q),
             gpu_ptr<DataType>(k),
             gpu_ptr<DataType>(v),
@@ -599,7 +598,6 @@ void sdpa_vector_2pass_fallback(
               kernel,
               grid_dim,
               block_dim,
-              0,
               gpu_ptr<DataType>(q),
               gpu_ptr<DataType>(k),
               gpu_ptr<DataType>(v),
@@ -626,7 +624,6 @@ void sdpa_vector_2pass_fallback(
               kernel,
               grid_dim,
               block_dim,
-              0,
               gpu_ptr<float>(intermediate),
               gpu_ptr<float>(sums),
               gpu_ptr<float>(maxs),
@@ -665,9 +662,7 @@ bool supports_sdpa_vector(
     const array& q,
     const array& k,
     const array& v,
-    bool has_mask,
     bool has_arr_mask,
-    bool do_causal,
     bool output_logsumexp) {
   if (output_logsumexp) {
     return false;

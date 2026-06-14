@@ -4,6 +4,7 @@
 #include "mlx/backend/cuda/gemms/cublas_gemm.h"
 #include "mlx/backend/cuda/kernel_utils.cuh"
 #include "mlx/dtype_utils.h"
+#include "mlx/utils.h"
 
 #include <cooperative_groups.h>
 
@@ -117,7 +118,6 @@ array unfold_inputs_nd(
         cu::naive_unfold_nd<DataType, NDIM>,
         num_blocks,
         block_dims,
-        0,
         gpu_ptr<DataType>(in),
         gpu_ptr<DataType>(unfolded),
         filter_size,
@@ -137,8 +137,8 @@ void gemm_conv_nd(
     ConvParams<NDIM>& params,
     Stream s) {
   // Get gemm shapes.
-  int mat_M = out.size() / params.O; // N * H_out * W_out
-  int mat_K = wt.size() / params.O; // C * H_wt * W_wt
+  int mat_M = safe_cast(out.size() / params.O, "conv"); // N * H_out * W_out
+  int mat_K = safe_cast(wt.size() / params.O, "conv"); // C * H_wt * W_wt
   int mat_N = params.O; // O
 
   // Unfold input to (N * H_out * W_out, C * H_wt * W_wt) for gemm.

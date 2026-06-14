@@ -491,6 +491,15 @@ mlx_atleast_3d(mlx_array* res, const mlx_array a, const mlx_stream s) {
   }
   return 0;
 }
+extern "C" int mlx_bartlett(mlx_array* res, int M, const mlx_stream s) {
+  try {
+    mlx_array_set_(*res, mlx::core::bartlett(M, mlx_stream_get_(s)));
+  } catch (std::exception& e) {
+    mlx_error(e.what());
+    return 1;
+  }
+  return 0;
+}
 extern "C" int mlx_bitwise_and(
     mlx_array* res,
     const mlx_array a,
@@ -544,6 +553,15 @@ extern "C" int mlx_bitwise_xor(
         *res,
         mlx::core::bitwise_xor(
             mlx_array_get_(a), mlx_array_get_(b), mlx_stream_get_(s)));
+  } catch (std::exception& e) {
+    mlx_error(e.what());
+    return 1;
+  }
+  return 0;
+}
+extern "C" int mlx_blackman(mlx_array* res, int M, const mlx_stream s) {
+  try {
+    mlx_array_set_(*res, mlx::core::blackman(M, mlx_stream_get_(s)));
   } catch (std::exception& e) {
     mlx_error(e.what());
     return 1;
@@ -1078,6 +1096,8 @@ extern "C" int mlx_dequantize(
             (bits.has_value ? std::make_optional<int>(bits.value)
                             : std::nullopt),
             std::string(mode),
+            (global_scale.ctx ? std::make_optional(mlx_array_get_(global_scale))
+                              : std::nullopt),
             (dtype.has_value ? std::make_optional<mlx::core::Dtype>(
                                    mlx_dtype_to_cpp(dtype.value))
                              : std::nullopt),
@@ -1534,6 +1554,24 @@ extern "C" int mlx_hadamard_transform(
             (scale.has_value ? std::make_optional<float>(scale.value)
                              : std::nullopt),
             mlx_stream_get_(s)));
+  } catch (std::exception& e) {
+    mlx_error(e.what());
+    return 1;
+  }
+  return 0;
+}
+extern "C" int mlx_hamming(mlx_array* res, int M, const mlx_stream s) {
+  try {
+    mlx_array_set_(*res, mlx::core::hamming(M, mlx_stream_get_(s)));
+  } catch (std::exception& e) {
+    mlx_error(e.what());
+    return 1;
+  }
+  return 0;
+}
+extern "C" int mlx_hanning(mlx_array* res, int M, const mlx_stream s) {
+  try {
+    mlx_array_set_(*res, mlx::core::hanning(M, mlx_stream_get_(s)));
   } catch (std::exception& e) {
     mlx_error(e.what());
     return 1;
@@ -2504,6 +2542,12 @@ extern "C" int mlx_qqmm(
             (bits.has_value ? std::make_optional<int>(bits.value)
                             : std::nullopt),
             std::string(mode),
+            (global_scale_x.ctx
+                 ? std::make_optional(mlx_array_get_(global_scale_x))
+                 : std::nullopt),
+            (global_scale_w.ctx
+                 ? std::make_optional(mlx_array_get_(global_scale_w))
+                 : std::nullopt),
             mlx_stream_get_(s)));
   } catch (std::exception& e) {
     mlx_error(e.what());
@@ -2529,6 +2573,8 @@ extern "C" int mlx_quantize(
             (bits.has_value ? std::make_optional<int>(bits.value)
                             : std::nullopt),
             std::string(mode),
+            (global_scale.ctx ? std::make_optional(mlx_array_get_(global_scale))
+                              : std::nullopt),
             mlx_stream_get_(s)));
   } catch (std::exception& e) {
     mlx_error(e.what());
@@ -3937,24 +3983,4 @@ mlx_zeros_like(mlx_array* res, const mlx_array a, const mlx_stream s) {
     return 1;
   }
   return 0;
-}
-
-extern "C" int mlx_bartlett(mlx_array* res, int M, const mlx_stream s) {
-  mlx_error("mlx_bartlett not implemented in SharpAI MLX fork");
-  return 1;
-}
-
-extern "C" int mlx_blackman(mlx_array* res, int M, const mlx_stream s) {
-  mlx_error("mlx_blackman not implemented in SharpAI MLX fork");
-  return 1;
-}
-
-extern "C" int mlx_hamming(mlx_array* res, int M, const mlx_stream s) {
-  mlx_error("mlx_hamming not implemented in SharpAI MLX fork");
-  return 1;
-}
-
-extern "C" int mlx_hanning(mlx_array* res, int M, const mlx_stream s) {
-  mlx_error("mlx_hanning not implemented in SharpAI MLX fork");
-  return 1;
 }

@@ -196,9 +196,7 @@ let cmlx = Target.target(
         "mlx/mlx/distributed/nccl/nccl.cpp",
         "mlx/mlx/distributed/nccl/nccl_stub",
         "mlx/mlx/distributed/jaccl/jaccl.cpp",
-        "mlx/mlx/distributed/jaccl/mesh.cpp",
-        "mlx/mlx/distributed/jaccl/ring.cpp",
-        "mlx/mlx/distributed/jaccl/utils.cpp",
+        "mlx/mlx/distributed/jaccl/lib",
     ],
     cSettings: [
         .headerSearchPath("mlx"),
@@ -209,8 +207,7 @@ let cmlx = Target.target(
         .headerSearchPath("mlx-c"),
         .headerSearchPath("json/single_include/nlohmann"),
         .headerSearchPath("fmt/include"),
-        .define("MLX_VERSION", to: "\"0.24.2\""),
-        .define("MLX_ENABLE_NAX", to: "1"),
+        .define("MLX_VERSION", to: "\"0.31.1\""),
     ],
     linkerSettings: linkerSettings
 )
@@ -335,7 +332,7 @@ let package = Package(
             sources: ["CustomFunctionExampleSimple.swift"]
         ),
     ],
-    cxxLanguageStandard: .gnucxx17
+    cxxLanguageStandard: .gnucxx20
 )
 
 if Context.environment["MLX_SWIFT_BUILD_DOC"] == "1"

@@ -52,8 +52,8 @@ public:
     void eval_gpu(const std::vector<array>& inputs, std::vector<array>& outputs) override {
         eval_impl(inputs, outputs);
         
-        auto& d = metal::device(mlx::core::Device::gpu);
-        d.add_temporary(outputs[0], stream().index);
+        auto& compute_encoder = metal::get_command_encoder(stream());
+        compute_encoder.add_temporary(outputs[0]);
     }
     
     void eval_cpu(const std::vector<array>& inputs, std::vector<array>& outputs) override {

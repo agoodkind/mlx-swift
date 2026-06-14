@@ -4,6 +4,161 @@
 
 using namespace metal;
 
+// ----------------------------------------------------------------------------
+// TurboQuant decompression for Metal — ported from TheTom/llama-cpp-turboquant
+// Sources: turbo-wht.h, ggml-turbo-quant.c (feature/turboquant-kv-cache branch)
+// Paper: Zandieh et al., TurboQuant, AISTATS/ICLR 2026
+//
+// Decompression path (used during SDPA attention):
+//   1. Look up 3-bit index → centroid value
+//   2. Collect all d=128 centroid values into local register array
+//   3. Apply inverse WHT rotation: D2 * FWHT * D1
+//   4. Scale by stored corrected norm
+
+// ---------------------------------------------------------------------------
+// WHT sign arrays — seed=42, must match CPU turbo_quant.h exactly
+// ---------------------------------------------------------------------------
+constant float turbo_wht_signs1[128] = {
+    -1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,
+    -1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,
+    -1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,
+    -1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1};
+constant float turbo_wht_signs2[128] = {
+    1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,
+    1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,
+    1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,
+    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1};
+
+// QJL sign arrays — seed=1042
+constant float turbo_qjl_signs1[128] = {
+    1,-1,-1,-1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,1,1,-1,1,1,-1,1,-1,-1,1,
+    1,1,1,1,-1,-1,1,1,-1,1,-1,-1,1,-1,1,1,1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,1,
+    -1,-1,-1,1,1,1,1,1,1,-1,-1,1,1,-1,-1,-1,-1,-1,1,1,1,1,-1,1,1,-1,1,1,1,1,1,1,
+    1,-1,1,-1,-1,1,-1,-1,-1,-1,1,-1,1,1,1,-1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,-1};
+constant float turbo_qjl_signs2[128] = {
+    1,1,-1,1,1,-1,1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,1,-1,1,1,1,-1,1,-1,-1,-1,-1,1,1,
+    -1,-1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,1,1,1,1,1,1,1,-1,-1,1,1,1,1,1,1,1,-1,1,1,
+    -1,-1,1,-1,1,1,-1,1,-1,-1,1,1,1,-1,1,-1,1,1,1,1,1,1,-1,1,-1,1,-1,1,-1,1,1,-1,
+    1,-1,-1,1,1,-1,1,1,-1,1,1,1,-1,1,1,1,-1,-1,1,-1,1,-1,-1,1,-1,1,-1,1,1,1,1,-1};
+
+// ---------------------------------------------------------------------------
+// 3-bit Lloyd-Max centroids for N(0, 1/128) — matches ggml-turbo-quant.c
+// ---------------------------------------------------------------------------
+constant float turbo_centroids_3bit[8] = {
+    -0.190685f, -0.117832f, -0.065717f, -0.021460f,
+     0.021460f,  0.065717f,  0.117832f,  0.190685f
+};
+
+// ---------------------------------------------------------------------------
+// Fast Walsh-Hadamard Transform (in-place, n=128, normalized by 1/sqrt(128))
+// ---------------------------------------------------------------------------
+static void turbo_fwht_128(thread float * x) {
+    for (int h = 1; h < 128; h *= 2) {
+        for (int i = 0; i < 128; i += h * 2) {
+            for (int j = i; j < i + h; j++) {
+                float a = x[j], b = x[j + h];
+                x[j]     = a + b;
+                x[j + h] = a - b;
+            }
+        }
+    }
+    const float inv_sqrt_128 = 0.08838834764831845f;
+    for (int i = 0; i < 128; i++) x[i] *= inv_sqrt_128;
+}
+
+// Inverse WHT rotation: D2 * FWHT * D1
+static void turbo_rotate_inverse(thread float * x,
+                                  constant float * s1,
+                                  constant float * s2) {
+    for (int i = 0; i < 128; i++) x[i] *= s2[i];
+    turbo_fwht_128(x);
+    for (int i = 0; i < 128; i++) x[i] *= s1[i];
+}
+
+// QJL inverse rotation for residual (same WHT, different seeds)
+static void turbo_qjl_rotate(thread float * x,
+                               constant float * qs1,
+                               constant float * qs2) {
+    for (int i = 0; i < 128; i++) x[i] *= qs2[i];
+    turbo_fwht_128(x);
+    for (int i = 0; i < 128; i++) x[i] *= qs1[i];
+}
+
+// ---------------------------------------------------------------------------
+// Bit-unpack helpers
+// ---------------------------------------------------------------------------
+
+// Extract 3-bit index for coordinate i from packed byte array
+static inline uchar unpack_3bit(const device uchar * packed, int i) {
+    int bit_offset = i * 3;
+    int byte_idx   = bit_offset / 8;
+    int bit_pos    = bit_offset % 8;
+    uint raw = (uint)packed[byte_idx];
+    if (byte_idx + 1 < 48) raw |= ((uint)packed[byte_idx + 1]) << 8;
+    return (uchar)((raw >> bit_pos) & 0x7);
+}
+
+// Extract QJL sign bit for coordinate i from packed byte array
+static inline float unpack_sign_bit(const device uchar * signs, int i) {
+    return (signs[i / 8] & (1u << (i % 8))) ? 1.0f : -1.0f;
+}
+
+constant float TURBO_QJL_CONST = 1.2533141373155003f; // sqrt(pi/2)
+
+// ---------------------------------------------------------------------------
+// Dequantize a full TurboQuantK vector (3-bit PolarQuant + 1-bit QJL)
+// Used for K-cache during SDPA dot product.
+//
+// packed_indices[48]: 3 bits × 128 coords
+// qjl_signs[16]:      1 bit  × 128 coords
+// norm:               corrected L2 scale
+// rnorm:              residual L2 scale
+// out[128]:           reconstructed float vector
+// ---------------------------------------------------------------------------
+static void turbo_dequant_k(
+    const device uchar * packed_indices,
+    const device uchar * qjl_signs,
+    float norm,
+    float rnorm,
+    thread float * out)
+{
+    // Stage 1: PolarQuant centroid lookup
+    thread float mse[128];
+    for (int i = 0; i < 128; i++) {
+        mse[i] = turbo_centroids_3bit[unpack_3bit(packed_indices, i)];
+    }
+    // Inverse rotation to get back to original space
+    turbo_rotate_inverse(mse, turbo_wht_signs1, turbo_wht_signs2);
+
+    // Stage 2: QJL residual
+    thread float signs_f[128];
+    for (int i = 0; i < 128; i++) signs_f[i] = unpack_sign_bit(qjl_signs, i);
+    // Inverse QJL rotation
+    turbo_qjl_rotate(signs_f, turbo_qjl_signs1, turbo_qjl_signs2);
+    const float qjl_scale = TURBO_QJL_CONST / 128.0f * rnorm;
+
+    // Combine and scale
+    for (int i = 0; i < 128; i++) {
+        out[i] = (mse[i] + signs_f[i] * qjl_scale) * norm;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dequantize a TurboQuantV vector (3-bit PolarQuant only — V-cache)
+// ---------------------------------------------------------------------------
+static void turbo_dequant_v(
+    const device uchar * packed_indices,
+    float norm,
+    thread float * out)
+{
+    thread float buf[128];
+    for (int i = 0; i < 128; i++) {
+        buf[i] = turbo_centroids_3bit[unpack_3bit(packed_indices, i)];
+    }
+    turbo_rotate_inverse(buf, turbo_wht_signs1, turbo_wht_signs2);
+    for (int i = 0; i < 128; i++) out[i] = buf[i] * norm;
+}
+
 constant bool has_mask [[function_constant(20)]];
 constant bool query_transposed [[function_constant(21)]];
 constant bool do_causal [[function_constant(22)]];

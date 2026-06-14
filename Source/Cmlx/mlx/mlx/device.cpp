@@ -25,20 +25,12 @@ void set_default_device(const Device& d) {
   mutable_default_device() = d;
 }
 
-bool operator==(const Device& lhs, const Device& rhs) {
-  return lhs.type == rhs.type && lhs.index == rhs.index;
-}
-
-bool operator!=(const Device& lhs, const Device& rhs) {
-  return !(lhs == rhs);
-}
-
 bool is_available(const Device& d) {
   switch (d.type) {
     case Device::cpu:
-      return cpu::is_available();
+      return cpu::is_available() && (d.index < cpu::device_count());
     case Device::gpu:
-      return gpu::is_available();
+      return gpu::is_available() && (d.index < gpu::device_count());
   }
   // appease compiler
   return false;

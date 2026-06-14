@@ -1,4 +1,4 @@
-const char* get_kernel_preamble() {
+const char* get_prebuilt_preamble() {
 return R"preamble(
 #include <cmath>
 #include <complex>
@@ -685,8 +685,6 @@ struct Select {
   }
 };
 }
-const char* get_kernel_preamble();
-using namespace mlx::core;
-using namespace mlx::core::detail;
+const char* get_prebuilt_preamble();
 )preamble";
 }
