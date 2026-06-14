@@ -60,7 +60,7 @@ void RMSNorm::eval_gpu(
     op_name += "_looped";
   }
   op_name += type_to_name(out);
-  auto& compute_encoder = d.get_command_encoder(s.index);
+  auto& compute_encoder = metal::get_command_encoder(s);
   {
     auto kernel = d.get_kernel(op_name);
 
@@ -82,8 +82,7 @@ void RMSNorm::eval_gpu(
 
     uint32_t w_stride = (w.ndim() == 1) ? w.strides()[0] : 0;
     compute_encoder.set_compute_pipeline_state(kernel);
-    compute_encoder.set_input_array(
-        x.data_shared_ptr() == nullptr ? out : x, 0);
+    compute_encoder.set_input_array(x, 0);
     compute_encoder.set_input_array(w, 1);
     compute_encoder.set_output_array(out, 2);
     compute_encoder.set_bytes(eps_, 3);
@@ -98,6 +97,7 @@ void RMSNormVJP::eval_gpu(
     std::vector<array>& outputs) {
   auto& s = stream();
   auto& d = metal::device(s.device);
+  auto& compute_encoder = metal::get_command_encoder(s);
 
   // Ensure row contiguity. We could relax this step by checking that the array
   // is contiguous (no broadcasts or holes) and that the input strides are the
@@ -131,7 +131,7 @@ void RMSNormVJP::eval_gpu(
     gx.set_data(allocator::malloc(gx.nbytes()));
   }
   if (g_copied && !g_in_gx) {
-    d.add_temporary(g, s.index);
+    compute_encoder.add_temporary(g);
   }
 
   auto axis_size = static_cast<uint32_t>(x.shape().back());
@@ -146,7 +146,7 @@ void RMSNormVJP::eval_gpu(
       gw_temp.copy_shared_buffer(g);
     } else {
       gw_temp.set_data(allocator::malloc(gw_temp.nbytes()));
-      d.add_temporary(gw_temp, s.index);
+      compute_encoder.add_temporary(gw_temp);
     }
   }
   gw.set_data(allocator::malloc(gw.nbytes()));
@@ -165,7 +165,6 @@ void RMSNormVJP::eval_gpu(
       {&has_w, MTL::DataType::DataTypeBool, 20},
   };
 
-  auto& compute_encoder = d.get_command_encoder(s.index);
   {
     auto kernel = d.get_kernel(op_name, hash_name, func_consts);
 
@@ -258,7 +257,7 @@ void LayerNorm::eval_gpu(
     n_reads = 4;
   }
   op_name += type_to_name(out);
-  auto& compute_encoder = d.get_command_encoder(s.index);
+  auto& compute_encoder = metal::get_command_encoder(s);
   {
     auto kernel = d.get_kernel(op_name);
 
@@ -287,8 +286,7 @@ void LayerNorm::eval_gpu(
     uint32_t w_stride = (w.ndim() == 1) ? w.strides()[0] : 0;
     uint32_t b_stride = (b.ndim() == 1) ? b.strides()[0] : 0;
     compute_encoder.set_compute_pipeline_state(kernel);
-    compute_encoder.set_input_array(
-        x.data_shared_ptr() == nullptr ? out : x, 0);
+    compute_encoder.set_input_array(x, 0);
     compute_encoder.set_input_array(w, 1);
     compute_encoder.set_input_array(b, 2);
     compute_encoder.set_output_array(out, 3);
@@ -305,6 +303,7 @@ void LayerNormVJP::eval_gpu(
     std::vector<array>& outputs) {
   auto& s = stream();
   auto& d = metal::device(s.device);
+  auto& compute_encoder = metal::get_command_encoder(s);
 
   // Ensure row contiguity. We could relax this step by checking that the array
   // is contiguous (no broadcasts or holes) and that the input strides are the
@@ -341,7 +340,7 @@ void LayerNormVJP::eval_gpu(
     gx.set_data(allocator::malloc(gx.nbytes()));
   }
   if (g_copied && !g_in_gx) {
-    d.add_temporary(g, s.index);
+    compute_encoder.add_temporary(g);
   }
 
   auto axis_size = static_cast<uint32_t>(x.shape().back());
@@ -356,14 +355,13 @@ void LayerNormVJP::eval_gpu(
       gw_temp.copy_shared_buffer(g);
     } else {
       gw_temp.set_data(allocator::malloc(gw_temp.nbytes()));
-      d.add_temporary(gw_temp, s.index);
+      compute_encoder.add_temporary(gw_temp);
     }
   }
   gw.set_data(allocator::malloc(gw.nbytes()));
   gb.set_data(allocator::malloc(gb.nbytes()));
 
   // Finish with the gradient for b in case we had a b
-  auto& compute_encoder = d.get_command_encoder(s.index);
   if (gb.ndim() == 1 && gb.size() == axis_size) {
     ReductionPlan plan(
         ReductionOpType::ContiguousStridedReduce, {n_rows}, {axis_size});

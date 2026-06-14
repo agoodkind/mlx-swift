@@ -107,14 +107,13 @@ void copy_gpu_inplace(
   auto kernel = dynamic ? get_dynamic_copy_kernel(d, kernel_name, in, out)
                         : get_copy_kernel(d, kernel_name, in, out);
 
-  auto& compute_encoder = d.get_command_encoder(s.index);
+  auto& compute_encoder = metal::get_command_encoder(s);
   compute_encoder.set_compute_pipeline_state(kernel);
-  bool donate_in = in.data_shared_ptr() == nullptr;
 
   inp_offset *= size_of(in.dtype());
   out_offset *= size_of(out.dtype());
 
-  compute_encoder.set_input_array(donate_in ? out : in, 0, inp_offset);
+  compute_encoder.set_input_array(in, 0, inp_offset);
   compute_encoder.set_output_array(out, 1, out_offset);
 
   auto thread_group_size = kernel->maxTotalThreadsPerThreadgroup();
@@ -191,7 +190,7 @@ void fill_gpu(const array& val, array& out, const Stream& s) {
   std::string kernel_name = large ? "s2" : (work_per_thread > 1 ? "sn" : "s");
   concatenate(kernel_name, "_copy", type_to_name(val), type_to_name(out));
   auto kernel = get_copy_kernel(d, kernel_name, val, out);
-  auto& compute_encoder = d.get_command_encoder(s.index);
+  auto& compute_encoder = metal::get_command_encoder(s);
   compute_encoder.set_compute_pipeline_state(kernel);
 
   compute_encoder.set_input_array(val, 0);

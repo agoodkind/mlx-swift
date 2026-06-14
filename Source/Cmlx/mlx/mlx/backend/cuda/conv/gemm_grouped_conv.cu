@@ -4,6 +4,7 @@
 #include "mlx/backend/cuda/gemms/cublas_gemm.h"
 #include "mlx/backend/cuda/kernel_utils.cuh"
 #include "mlx/dtype_utils.h"
+#include "mlx/utils.h"
 
 #include <cooperative_groups.h>
 
@@ -120,7 +121,6 @@ array grouped_unfold_transpose_inputs_nd(
         cu::naive_grouped_unfold_transpose_nd<DataType, NDIM>,
         num_blocks,
         block_dims,
-        0,
         gpu_ptr<DataType>(in),
         gpu_ptr<DataType>(unfolded),
         filter_size,
@@ -142,8 +142,9 @@ void gemm_grouped_conv_nd(
   // Get gemm shapes.
   int C_per_group = params.C / params.groups;
   int O_per_group = params.O / params.groups;
-  int mat_M = out.size() / params.O; // N * H_out * W_out
-  int mat_K = wt.size() / params.O; // C_per_group * H_wt * W_wt
+  int mat_M = safe_cast(out.size() / params.O, "conv"); // N * H_out * W_out
+  int mat_K =
+      safe_cast(wt.size() / params.O, "conv"); // C_per_group * H_wt * W_wt
   int mat_N = O_per_group; // O_per_group
 
   // Unfold input to (N * H_out * W_out, C * H_wt * W_wt) for gemm.

@@ -15,16 +15,6 @@ constant bool has_mask [[function_constant(300)]];
 constant bool do_causal [[function_constant(301)]];
 constant bool has_sinks [[function_constant(302)]];
 
-template <typename T>
-struct TransformScale {
-  T scale;
-  METAL_FUNC TransformScale(T scale_) : scale(scale_) {}
-
-  METAL_FUNC T apply(T x) const {
-    return scale * x;
-  }
-};
-
 struct MaxOp {
   template <typename T>
   METAL_FUNC static constexpr T apply(T x, T y) {
@@ -173,7 +163,7 @@ template <
   VBlockLoader loader_v(
       V, params->V_strides[2], Vs, simd_group_id, simd_lane_id);
 
-  TransformScale<T> ts(static_cast<T>(params->scale * M_LOG2E_F));
+  const AccumType scale = params->scale * M_LOG2E_F;
 
   // Prepare MMA tiles
   constexpr short kFragSize = 8; // MMAFrag size
@@ -216,13 +206,12 @@ template <
 
   threadgroup_barrier(mem_flags::mem_threadgroup);
 
-  // Load Q blocks apply scale
+  // Load Q blocks
   if (!align_Q && int(tid.x) == (params->NQ_aligned)) {
     loader_q.load_safe(short2(BD, params->qL_rem));
   } else {
     loader_q.load_unsafe();
   }
-  loader_q.apply_inplace_op(ts);
 
   // Init row reduction variables
   constexpr short kRowsPT = decltype(Stile)::kRowsPerThread;
@@ -245,11 +234,16 @@ template <
   }
 
   int kb_lim = params->NK;
+  int kb_min_causal = params->NK;
 
   if (do_causal) {
     int q_max = (tid.x + 1) * BQ + params->qL_off;
     kb_lim = (q_max + BK - 1) / BK;
     kb_lim = min(params->NK, kb_lim);
+
+    int q_min = tid.x * BQ + params->qL_off;
+    q_min = max(0, q_min);
+    kb_min_causal = (q_min / BK);
   }
 
   // Loop over KV seq length
@@ -281,6 +275,12 @@ template <
       tile_matmad(Stile, Qtile, Ktile, Stile);
     }
 
+    // Apply scale in float32
+    STEEL_PRAGMA_UNROLL
+    for (short ii = 0; ii < decltype(Stile)::kElemsPerTile; ii++) {
+      Stile.elems()[ii] *= scale;
+    }
+
     // Mask out length sequence
     if (!align_K && kb == (params->NK_aligned)) {
       using stile_t = decltype(Stile);
@@ -303,7 +303,7 @@ template <
     }
 
     // Mask out if causal
-    if (do_causal && kb >= (kb_lim - ((BQ + BK - 1) / BK) - int(!align_K))) {
+    if (do_causal && kb >= kb_min_causal) {
       using stile_t = decltype(Stile);
       using selem_t = typename stile_t::elem_type;
       constexpr auto neg_inf = Limits<selem_t>::finite_min;

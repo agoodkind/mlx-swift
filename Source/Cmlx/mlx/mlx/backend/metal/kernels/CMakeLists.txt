@@ -67,6 +67,7 @@ set(STEEL_HEADERS
     steel/conv/loaders/loader_channel_n.h
     steel/conv/loaders/loader_general.h
     steel/conv/kernels/steel_conv.h
+    steel/conv/kernels/steel_conv_3d.h
     steel/conv/kernels/steel_conv_general.h
     steel/gemm/gemm.h
     steel/gemm/mma.h
@@ -108,7 +109,8 @@ set(STEEL_NAX_HEADERS
     steel/utils/integral_constant.h
     steel/gemm/kernels/steel_gemm_fused_nax.h
     steel/gemm/kernels/steel_gemm_gather_nax.h
-    steel/gemm/kernels/steel_gemm_splitk_nax.h)
+    steel/gemm/kernels/steel_gemm_splitk_nax.h
+    steel/gemm/kernels/steel_gemm_segmented_nax.h)
 
 set(STEEL_NAX_ATTN_HEADERS
     steel/defines.h
@@ -143,6 +145,7 @@ if(NOT MLX_METAL_JIT)
   build_kernel(ternary ternary.h ternary_ops.h)
   build_kernel(unary unary.h unary_ops.h)
   build_kernel(steel/conv/kernels/steel_conv ${STEEL_HEADERS})
+  build_kernel(steel/conv/kernels/steel_conv_3d ${STEEL_HEADERS})
   build_kernel(steel/conv/kernels/steel_conv_general ${STEEL_HEADERS})
   build_kernel(steel/gemm/kernels/steel_gemm_fused ${STEEL_HEADERS})
   build_kernel(steel/gemm/kernels/steel_gemm_gather ${STEEL_HEADERS})
@@ -152,12 +155,15 @@ if(NOT MLX_METAL_JIT)
   build_kernel(gemv_masked steel/utils.h)
   build_kernel(steel/attn/kernels/steel_attention ${STEEL_ATTN_HEADERS})
 
-  if((MLX_METAL_VERSION GREATER_EQUAL 400) AND (MACOS_SDK_VERSION GREATER_EQUAL
-                                                26.2))
+  if(MLX_METAL_VERSION GREATER_EQUAL 400
+     AND MACOS_SDK_VERSION VERSION_GREATER_EQUAL 26.2
+     AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_GREATER_EQUAL 26.2)
 
     build_kernel(steel/gemm/kernels/steel_gemm_fused_nax ${STEEL_NAX_HEADERS})
     build_kernel(steel/gemm/kernels/steel_gemm_gather_nax ${STEEL_NAX_HEADERS})
     build_kernel(steel/gemm/kernels/steel_gemm_splitk_nax ${STEEL_NAX_HEADERS})
+    build_kernel(steel/gemm/kernels/steel_gemm_segmented_nax
+                 ${STEEL_NAX_HEADERS})
 
     build_kernel(quantized_nax quantized_nax.h ${STEEL_NAX_HEADERS})
     build_kernel(fp_quantized_nax fp4.h fp8.h fp_quantized_nax.h
@@ -172,9 +178,14 @@ if(NOT MLX_METAL_JIT)
 
 endif()
 
+set(METAL_LINK_FLAGS)
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+  set(METAL_LINK_FLAGS "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 add_custom_command(
   OUTPUT ${MLX_METAL_PATH}/mlx.metallib
-  COMMAND xcrun -sdk macosx metallib ${KERNEL_AIR} -o
+  COMMAND xcrun -sdk macosx metal ${METAL_LINK_FLAGS} ${KERNEL_AIR} -o
           ${MLX_METAL_PATH}/mlx.metallib
   DEPENDS ${KERNEL_AIR}
   COMMENT "Building mlx.metallib"

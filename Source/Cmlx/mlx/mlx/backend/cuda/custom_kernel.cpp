@@ -21,8 +21,6 @@ constexpr const char* default_header = R"(
 
 #include <cooperative_groups.h>
 
-#define inf cuda::std::numeric_limits<float>::infinity()
-
 )";
 
 std::string template_arguments_hash(
@@ -373,7 +371,8 @@ void CustomKernel::eval_gpu(
               kernel, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem);
         }
       });
-  encoder.add_kernel_node(kernel, grid, block, shared_memory_, args.args());
+  encoder.add_kernel_node_raw(
+      kernel, grid, block, {}, shared_memory_, args.args());
 }
 
 } // namespace mlx::core::fast

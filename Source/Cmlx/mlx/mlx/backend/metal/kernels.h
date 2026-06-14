@@ -201,6 +201,17 @@ MTL::ComputePipelineState* get_steel_conv_kernel(
     int n_channel_specialization,
     bool small_filter);
 
+MTL::ComputePipelineState* get_steel_conv_3d_kernel(
+    metal::Device& d,
+    const std::string& kernel_name,
+    const array& out,
+    int bm,
+    int bn,
+    int bk,
+    int wm,
+    int wn,
+    bool small_filter);
+
 MTL::ComputePipelineState* get_gemv_masked_kernel(
     metal::Device& d,
     const std::string& kernel_name,
@@ -287,6 +298,20 @@ MTL::ComputePipelineState* get_steel_gemm_gather_nax_kernel(
     bool rhs);
 
 MTL::ComputePipelineState* get_steel_gemm_splitk_nax_kernel(
+    metal::Device& d,
+    const std::string& kernel_name,
+    const std::string& hash_name,
+    const metal::MTLFCList& func_consts,
+    const array& out,
+    bool transpose_a,
+    bool transpose_b,
+    int bm,
+    int bn,
+    int bk,
+    int wm,
+    int wn);
+
+MTL::ComputePipelineState* get_steel_gemm_segmented_nax_kernel(
     metal::Device& d,
     const std::string& kernel_name,
     const std::string& hash_name,
