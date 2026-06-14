@@ -4,11 +4,11 @@ cmake_minimum_required(VERSION 3.16)
 
 # ----------------------------- Setup -----------------------------
 project(mlx.data LANGUAGES CXX C)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 # ----------------------------- Configuration -----------------------------
 if(NOT MLX_C_VERSION)
-  set(MLX_C_VERSION 0.5.0)
+  set(MLX_C_VERSION 0.6.0)
 endif()
 
 option(BUILD_SHARED_LIBS "Build mlx C as a shared library" OFF)
@@ -35,7 +35,7 @@ else()
   FetchContent_Declare(
     mlx
     GIT_REPOSITORY "https://github.com/ml-explore/mlx.git"
-    GIT_TAG v0.30.6)
+    GIT_TAG v0.31.1)
   FetchContent_MakeAvailable(mlx)
 endif()
 
