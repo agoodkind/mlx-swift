@@ -986,13 +986,16 @@ METAL_FUNC void qmm_t_nax_tgp_impl(
   // Make the weight loader
   loader_w_t loader_w(wl, scales, biases, K, Ws, simd_gid, simd_lid);
 
+  constexpr short UM = 16;
+  constexpr short UN = 32;
+  constexpr short UK = 16;
   constexpr short SM = BM / WM;
   constexpr short SN = BN / WN;
   constexpr short SK = 32;
 
-  constexpr short TM = SM / 16;
-  constexpr short TN = SN / 16;
-  constexpr short TK = SK / 16;
+  constexpr short TM = SM / UM;
+  constexpr short TN = SN / UN;
+  constexpr short TK = SK / UK;
 
   const short tm = SM * (simd_gid / WN);
   const short tn = SN * (simd_gid % WN);
@@ -1010,7 +1013,12 @@ METAL_FUNC void qmm_t_nax_tgp_impl(
 
   using AccumType = float;
 
-  NAXTile<AccumType, TM, TN> Dtile;
+  using ASubTile = NAXSubTile<T, UM, UK>;
+  using BSubTile = NAXSubTile<T, UN, UK>;
+  using DSubTile = NAXSubTile<AccumType, UM, UN>;
+
+  NAXTile<AccumType, TM, TN, DSubTile> Dtile;
+
   Dtile.clear();
 
   x += tm * K;
@@ -1029,8 +1037,8 @@ METAL_FUNC void qmm_t_nax_tgp_impl(
 
         STEEL_PRAGMA_NO_UNROLL
         for (int kk1 = 0; kk1 < BK; kk1 += SK) {
-          NAXTile<T, TM, TK> Atile;
-          NAXTile<T, TN, TK> Btile;
+          NAXTile<T, TM, TK, ASubTile> Atile;
+          NAXTile<T, TN, TK, BSubTile> Btile;
 
           volatile int compiler_barrier;
 
@@ -1133,13 +1141,16 @@ METAL_FUNC void qmm_n_nax_tgp_impl(
   // const short num_outs = min(BN, N - y_col);
   loader_w_t loader_w(wl, scales, biases, K, Ws, simd_gid, simd_lid);
 
+  constexpr short UM = 16;
+  constexpr short UN = 32;
+  constexpr short UK = 16;
   constexpr short SM = BM / WM;
   constexpr short SN = BN / WN;
   constexpr short SK = 32;
 
-  constexpr short TM = SM / 16;
-  constexpr short TN = SN / 16;
-  constexpr short TK = SK / 16;
+  constexpr short TM = SM / UM;
+  constexpr short TN = SN / UN;
+  constexpr short TK = SK / UK;
 
   const short tm = SM * (simd_gid / WN);
   const short tn = SN * (simd_gid % WN);
@@ -1151,7 +1162,12 @@ METAL_FUNC void qmm_n_nax_tgp_impl(
 
   using AccumType = float;
 
-  NAXTile<AccumType, TM, TN> Dtile;
+  using ASubTile = NAXSubTile<T, UM, UK>;
+  using BSubTile = NAXSubTile<T, UK, UN>;
+  using DSubTile = NAXSubTile<AccumType, UM, UN>;
+
+  NAXTile<AccumType, TM, TN, DSubTile> Dtile;
+
   Dtile.clear();
 
   x += tm * K;
@@ -1163,8 +1179,8 @@ METAL_FUNC void qmm_n_nax_tgp_impl(
 
     STEEL_PRAGMA_NO_UNROLL
     for (int kk1 = 0; kk1 < BK; kk1 += SK) {
-      NAXTile<T, TM, TK> Atile;
-      NAXTile<T, TK, TN> Btile;
+      NAXTile<T, TM, TK, ASubTile> Atile;
+      NAXTile<T, TK, TN, BSubTile> Btile;
 
       volatile int compiler_barrier;
 
@@ -1518,13 +1534,16 @@ template <
   scales += transpose ? y_col_long * K_g : y_col / group_size;
   biases += transpose ? y_col_long * K_g : y_col / group_size;
 
+  constexpr short UM = 16;
+  constexpr short UN = 32;
+  constexpr short UK = 16;
   constexpr short SM = BM / WM;
   constexpr short SN = BN / WN;
   constexpr short SK = 32;
 
-  constexpr short TM = SM / 16;
-  constexpr short TN = SN / 16;
-  constexpr short TK = SK / 16;
+  constexpr short TM = SM / UM;
+  constexpr short TN = SN / UN;
+  constexpr short TK = SK / UK;
 
   const short tm = SM * (simd_group_id / WN);
   const short tn = SN * (simd_group_id % WN);
@@ -1541,6 +1560,10 @@ template <
   constexpr short BC = transpose ? TK : TN;
 
   using AccumType = float;
+
+  using ASubTile = NAXSubTile<T, UM, UK>;
+  using BSubTile = NAXSubTile<T, transpose ? UN : UK, transpose ? UK : UN>;
+  using DSubTile = NAXSubTile<AccumType, UM, UN>;
 
   // Do as many matmuls as necessary
   uint32_t index;
@@ -1562,7 +1585,8 @@ template <
     }
     threadgroup_barrier(mem_flags::mem_none);
 
-    NAXTile<AccumType, TM, TN> Dtile;
+    NAXTile<AccumType, TM, TN, DSubTile> Dtile;
+
     Dtile.clear();
 
     const device T* xn = x + tm * K;
@@ -1592,8 +1616,8 @@ template <
 
           STEEL_PRAGMA_NO_UNROLL
           for (int kk1 = 0; kk1 < BK; kk1 += SK) {
-            NAXTile<T, TM, TK> Atile;
-            NAXTile<T, BR, BC> Btile;
+            NAXTile<T, TM, TK, ASubTile> Atile;
+            NAXTile<T, BR, BC, BSubTile> Btile;
 
             volatile int compiler_barrier;
 
@@ -1630,8 +1654,8 @@ template <
 
           STEEL_PRAGMA_NO_UNROLL
           for (int kk1 = 0; kk1 < BK; kk1 += SK) {
-            NAXTile<T, TM, TK> Atile;
-            NAXTile<T, BR, BC> Btile;
+            NAXTile<T, TM, TK, ASubTile> Atile;
+            NAXTile<T, BR, BC, BSubTile> Btile;
 
             volatile int compiler_barrier;
 

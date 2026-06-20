@@ -15,7 +15,7 @@ constant bool align_K [[function_constant(202)]];
 template <
     bool kAlignedM,
     bool kAlignedN,
-    class NAXTile_t,
+    typename NAXTile_t,
     typename T>
 void gemm_epilogue(
     thread NAXTile_t& Dtile,
@@ -27,40 +27,37 @@ void gemm_epilogue(
 
   (void)params;
 
+  constexpr short UM = NAXTile_t::kSubTileRows;
+  constexpr short UN = NAXTile_t::kSubTileCols;
+  using CSubTile = NAXSubTile<T, UM, UN>;
+
   using V = typename NAXTile_t::elem_type;
 
   constexpr short TM = NAXTile_t::kTileRows;
   constexpr short TN = NAXTile_t::kTileCols;
-  constexpr short kElemsPerFrag = NAXTile_t::kElemsPerFrag;
+  constexpr short kElemsPerSubTile = NAXTile_t::kElemsPerSubTile;
 
-  using CFrag = typename NAXTile_t::NAXFrag_t;
-  using cfrag_t = typename CFrag::template dtype_frag_t<T>;
+  STEEL_PRAGMA_UNROLL
+  for (short mm = 0; mm < TM; mm++) {
+    STEEL_PRAGMA_UNROLL
+    for (short nn = 0; nn < TN; nn++) {
+      const short m = mm * UM;
+      const short n = nn * UN;
 
-  const_for_loop<0, TM, 1>([&](auto mm) {
-    const_for_loop<0, TN, 1>([&](auto nn) {
-      auto m = mm * Int<CFrag::kFragRows>{};
-      auto n = nn * Int<CFrag::kFragCols>{};
-
-      cfrag_t celems;
+      CSubTile CTile;
 
       if constexpr (kAlignedM && kAlignedN) {
-        CFrag::load(celems, C, addmm_params->ldc, addmm_params->fdc, m, n);
+        CTile.load(C, addmm_params->ldc, addmm_params->fdc, m, n);
       } else {
-        CFrag::load_safe(
-            celems,
-            C,
-            addmm_params->ldc,
-            addmm_params->fdc,
-            sgp_sm,
-            sgp_sn,
-            m,
-            n);
+        CTile.load_safe(
+            C, addmm_params->ldc, addmm_params->fdc, sgp_sm, sgp_sn, m, n);
       }
 
-      thread auto& delems = Dtile.template frag_at<mm, nn>();
+      auto delems = Dtile.subtile_at(mm, nn).elems();
+      auto celems = CTile.elems();
 
       STEEL_PRAGMA_UNROLL
-      for (short i = 0; i < kElemsPerFrag; i++) {
+      for (short i = 0; i < kElemsPerSubTile; i++) {
         if (do_axpby) {
           delems[i] = addmm_params->alpha * delems[i] +
               addmm_params->beta * static_cast<V>(celems[i]);
@@ -68,8 +65,8 @@ void gemm_epilogue(
           delems[i] += static_cast<V>(celems[i]);
         }
       }
-    });
-  });
+    }
+  }
 }
 
 // clang-format off
@@ -147,12 +144,15 @@ template <
     C += c_row_long * addmm_params->ldc + c_col_long * addmm_params->fdc;
   }
 
+  constexpr short UM = 16;
+  constexpr short UN = 32;
+  constexpr short UK = 16;
   constexpr short SM = BM / WM;
   constexpr short SN = BN / WN;
   constexpr short SK = 32;
 
-  constexpr short TM = SM / 16;
-  constexpr short TN = SN / 16;
+  constexpr short TM = SM / UM;
+  constexpr short TN = SN / UN;
 
   const short tm = SM * (simd_group_id / WN);
   const short tn = SN * (simd_group_id % WN);
@@ -175,7 +175,8 @@ template <
     C += tm * addmm_params->ldc + tn * addmm_params->fdc;
   }
 
-  NAXTile<AccumType, TM, TN> Dtile;
+  using DSubTile = NAXSubTile<AccumType, UM, UN>;
+  NAXTile<AccumType, TM, TN, DSubTile> Dtile;
 
   dispatch_bool(align_K, [&](auto kAlignedK) {
     dispatch_bool(align_M || !is_unaligned_sm, [&](auto kAlignedM) {
@@ -191,6 +192,9 @@ template <
             kAlignedM.value,
             kAlignedN.value,
             kAlignedK.value,
+            UM,
+            UN,
+            UK,
             AccumType>(
             A,
             B,
