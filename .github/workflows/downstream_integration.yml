@@ -13,6 +13,8 @@ jobs:
     name: Test with SwiftLM (Umbrella Repo)
     runs-on: macos-15
     timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - name: Checkout PR branch (mlx-swift)
         uses: actions/checkout@v4
@@ -28,8 +30,11 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
-      - name: Install Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain || true
+      - name: Show selected Xcode toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodebuild -showComponent MetalToolchain || true
 
       - name: Resolve Dependencies (to populate SPM cache)
         run: swift package resolve
