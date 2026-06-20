@@ -34,17 +34,15 @@ jobs:
         id: sync_branch
         run: |
           git checkout -B sync/upstream-latest origin/main
-          git checkout upstream/main -- .
-          git checkout origin/main -- .github/workflows
 
-          if git diff --quiet; then
+          if git diff --quiet origin/main upstream/main -- . ':(exclude).github/workflows'; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
             echo "No upstream changes after preserving fork workflows."
             exit 0
           fi
 
+          git diff --binary origin/main upstream/main -- . ':(exclude).github/workflows' | git apply --index
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          git add -A
           git commit -m "chore: sync with upstream/main"
           git push -f origin sync/upstream-latest
 
