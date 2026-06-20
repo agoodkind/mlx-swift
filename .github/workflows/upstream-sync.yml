@@ -142,17 +142,19 @@ jobs:
             local run_id="$1"
             local workflow_name="$2"
             local attempt_count
-            local run_data
+            local -a run_fields
             local run_status
             local run_conclusion
             local run_url
 
             for attempt_count in {1..180}; do
-              run_data=$(gh run view "$run_id" \
+              mapfile -t run_fields < <(gh run view "$run_id" \
                 --repo "$GITHUB_REPOSITORY" \
                 --json status,conclusion,url \
-                --jq '[.status, (.conclusion // ""), .url] | @tsv')
-              IFS=$'\t' read -r run_status run_conclusion run_url <<< "$run_data"
+                --jq '.status, (.conclusion // ""), .url')
+              run_status="${run_fields[0]}"
+              run_conclusion="${run_fields[1]}"
+              run_url="${run_fields[2]}"
 
               if [[ "$run_status" == "completed" ]]; then
                 if [[ "$run_conclusion" == "success" ]]; then
