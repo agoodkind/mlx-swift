@@ -1626,6 +1626,10 @@ struct integral_constant {
   METAL_FUNC constexpr operator value_type() const noexcept {
     return value;
   }
+
+  // METAL_FUNC constexpr value_type operator()() const noexcept {
+  //   return value;
+  // }
 };
 
 template <bool B>
@@ -1824,7 +1828,7 @@ struct BaseMMAFrag<T, 8, 8> {
       for (short j = 0; j < kElemCols; j++) {
         if ((off_x + i) < lim_x && (off_y + j) < lim_y) {
           dst[i * kElemCols + j] =
-              static_cast<T>(src[(off_x + i) * str_x + (off_y + j) * str_y]);
+              static_cast<T>(src[(off_x + i) * str_x + (off_x + j) * str_y]);
         } else {
           dst[i * kElemCols + j] = T(0);
         }
