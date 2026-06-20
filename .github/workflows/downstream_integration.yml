@@ -3,6 +3,10 @@ name: Downstream Integration Test
 on:
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test-swiftlm-umbrella:
@@ -36,7 +40,7 @@ jobs:
         # SPM `package edit` cannot edit path dependencies, so we directly overwrite
         # the submodule directory with our PR branch content.
         run: |
-          rsync -a --delete $GITHUB_WORKSPACE/mlx-swift-pr/ $GITHUB_WORKSPACE/SwiftLM/mlx-swift/
+          rsync -a --delete "$GITHUB_WORKSPACE/mlx-swift-pr/" "$GITHUB_WORKSPACE/SwiftLM/mlx-swift/"
         working-directory: SwiftLM
 
       - name: Install MLX Metal library
@@ -46,7 +50,7 @@ jobs:
           METALLIB=$(echo /tmp/mlx_venv/lib/python*/site-packages/mlx/lib/mlx.metallib)
           # Make it available system-wide for all subsequent steps
           sudo cp "$METALLIB" /usr/local/lib/mlx.metallib || true
-          echo "MLX_METAL_LIB=$METALLIB" >> $GITHUB_ENV
+          echo "MLX_METAL_LIB=$METALLIB" >> "$GITHUB_ENV"
 
       - name: Build SwiftLM
         run: swift build --build-tests
@@ -58,7 +62,7 @@ jobs:
           # Copy to all locations the test runner and linked bundles may search
           find SwiftLM/.build -type d \( -name "debug" -o -name "release" \) -exec cp "$METALLIB" {}/ \; 2>/dev/null || true
           find SwiftLM/.build -name "*.xctest" -exec cp "$METALLIB" {}/Contents/MacOS/ \; 2>/dev/null || true
-          find SwiftLM/.build -name "*Tests" -type f -exec sh -c 'cp "'"$METALLIB"'" "$(dirname ${1})/"' _ {} \; 2>/dev/null || true
+          find SwiftLM/.build -name "*Tests" -type f -exec sh -c 'cp "'"$METALLIB"'" "$(dirname "${1}")/"' _ {} \; 2>/dev/null || true
 
       - name: Run SwiftLM Integration Tests
         run: swift test --parallel --skip-build

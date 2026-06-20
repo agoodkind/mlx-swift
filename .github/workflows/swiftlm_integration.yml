@@ -1,6 +1,12 @@
 name: SwiftLM Integration Tests
 
-on: [pull_request, push]
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   integration-test:

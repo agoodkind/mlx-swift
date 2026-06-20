@@ -6,6 +6,7 @@ on:
   workflow_dispatch: # Enable manual triggers
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -72,3 +73,11 @@ jobs:
             -f title="🔄 Auto-Sync: Apple Upstream Repository" \
             -f body="Automated PR to synchronize SharpAI fork with Apple mlx-swift upstream repository. Please review merge conflicts (if any) and verify CI pipelines." \
             --jq '.html_url'
+
+      - name: Dispatch Sync Branch Validation
+        if: steps.sync_branch.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run swiftlm_integration.yml --ref sync/upstream-latest
+          gh workflow run downstream_integration.yml --ref sync/upstream-latest
