@@ -21,6 +21,7 @@ jobs:
         with:
           fetch-depth: 0
           path: mlx-swift-pr
+          submodules: recursive
 
       - name: Checkout SwiftLM (Parent Repo)
         uses: actions/checkout@v4
