@@ -79,5 +79,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run swiftlm_integration.yml --ref sync/upstream-latest
-          gh workflow run downstream_integration.yml --ref sync/upstream-latest
+          gh workflow run swiftlm_integration.yml --repo "$GITHUB_REPOSITORY" --ref sync/upstream-latest
+          gh workflow run downstream_integration.yml --repo "$GITHUB_REPOSITORY" --ref sync/upstream-latest
