@@ -45,7 +45,7 @@ jobs:
 
           git diff --binary origin/main upstream/main -- . ':(exclude).github/workflows' | git apply --index
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          git commit -m "chore: sync with upstream/main"
+          git commit -m "chore: sync with upstream/main [skip ci]"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git push -f origin sync/upstream-latest
 
