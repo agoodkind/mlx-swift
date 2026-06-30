@@ -37,15 +37,29 @@ jobs:
         run: |
           git checkout -B sync/upstream-latest origin/main
 
-          if git diff --quiet origin/main upstream/main -- . ':(exclude).github/workflows'; then
+          # Only sync when upstream/main has commits the fork does not already have.
+          if [ -z "$(git rev-list origin/main..upstream/main)" ]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "No upstream changes after preserving fork workflows."
+            echo "No new upstream commits."
             exit 0
           fi
 
-          git diff --binary origin/main upstream/main -- . ':(exclude).github/workflows' | git apply --index
+          # Merge upstream, but let the fork win conflicting hunks (-X ours) so the
+          # branch keeps the fork's necessary build wiring (Linux backend excludes,
+          # vendored mlx/mlx-c, the turbo/fast/fp8/ssd feature config in Package.swift)
+          # and stays buildable. A genuine vendored-core bump is manual work; this
+          # carries upstream's non-conflicting changes forward for review.
+          git merge -X ours --no-edit -m "chore: sync with upstream/main [skip ci]" upstream/main
+
+          # Flag when upstream's new commits touched the build manifest, so the
+          # manual core bump is not silently skipped during PR review.
+          if [ -n "$(git log --format=%H origin/main..upstream/main -- Package.swift Package.resolved)" ]; then
+            echo "pkg_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pkg_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          git commit -m "chore: sync with upstream/main [skip ci]"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git push -f origin sync/upstream-latest
 
@@ -67,13 +81,18 @@ jobs:
             exit 0
           fi
 
+          PR_BODY="Automated PR to synchronize the fork with Apple mlx-swift upstream. The merge uses -X ours, so the fork build config wins on conflict and the branch stays buildable. Verify CI pipelines."
+          if [[ "${{ steps.sync_branch.outputs.pkg_changed }}" == "true" ]]; then
+            PR_BODY="${PR_BODY}"$'\n\n'"WARNING: upstream changed Package.swift or Package.resolved in this range. -X ours kept the fork build wiring, so a vendored-mlx core bump may be needed manually (3-way merge fast.cpp, regenerate JIT kernels, patch core API changes). Review before merging."
+          fi
+
           gh api \
             --method POST \
             "/repos/${GITHUB_REPOSITORY}/pulls" \
             -f base=main \
             -f head="${GITHUB_REPOSITORY_OWNER}:sync/upstream-latest" \
             -f title="🔄 Auto-Sync: Apple Upstream Repository" \
-            -f body="Automated PR to synchronize SharpAI fork with Apple mlx-swift upstream repository. Please review merge conflicts (if any) and verify CI pipelines." \
+            -f body="$PR_BODY" \
             --jq '.html_url'
 
       - name: Dispatch Sync Branch Validation
