@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Configure Git
         run: |
@@ -34,6 +34,8 @@ jobs:
 
       - name: Create or Update Sync Branch
         id: sync_branch
+        env:
+          SYNC_PUSH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
         run: |
           git checkout -B sync/upstream-latest origin/main
 
@@ -61,7 +63,7 @@ jobs:
 
           echo "has_changes=true" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git push -f origin sync/upstream-latest
+          git push -f "https://x-access-token:${SYNC_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" sync/upstream-latest
 
       - name: Create Pull Request to Main
         if: steps.sync_branch.outputs.has_changes == 'true'
