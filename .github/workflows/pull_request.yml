@@ -87,6 +87,17 @@ jobs:
         run: |
           brew install cmake ninja
 
+      - name: Verify documentation
+        run: scripts/verify-docs.sh
+
+      - name: Build SwiftPM (Xcode, iOS)
+        shell: sh
+        run: |
+          xcodebuild -version
+          swift --version
+          rm -rf ~/Library/Developer/Xcode/DerivedData/*
+          xcodebuild build -scheme mlx-swift-Package -destination 'generic/platform=iOS'
+
       - name: Build SwiftPM (Xcode, macOS)
         shell: sh
         env:
