@@ -930,8 +930,14 @@ CommandEncoder& get_command_encoder(Stream s) {
   auto& encoders = get_command_encoders();
   auto it = encoders.find(s.index);
   if (it == encoders.end()) {
-    throw std::runtime_error(
-        fmt::format("There is no Stream(gpu, {}) in current thread.", s.index));
+    // Command encoders are thread-local. When a computation is recorded on one
+    // thread and evaluated on another (for example a model driven from Swift
+    // concurrency, whose cooperative executor is not pinned to an OS thread),
+    // this thread has no encoder for the stream. Create it on demand instead of
+    // trapping. Access to a stream is serialized by the caller, so a per-thread
+    // encoder for the same stream is safe.
+    auto& d = device(s.device);
+    it = encoders.try_emplace(s.index, d, s.index, d.residency_set()).first;
   }
   return it->second;
 }
