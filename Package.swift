@@ -257,40 +257,6 @@ let cmlx = Target.target(
         "mlx/setup.py",
         "mlx/tests",
 
-        // special handling for cuda -- we need to keep one file:
-        // mlx/mlx/backend/cuda/no_cuda.cpp
-
-        "mlx/mlx/backend/cuda/allocator.cpp",
-        "mlx/mlx/backend/cuda/compiled.cpp",
-        "mlx/mlx/backend/cuda/conv.cpp",
-        "mlx/mlx/backend/cuda/cublas_utils.cpp",
-        "mlx/mlx/backend/cuda/cudnn_utils.cpp",
-        "mlx/mlx/backend/cuda/custom_kernel.cpp",
-        "mlx/mlx/backend/cuda/delayload.cpp",
-        "mlx/mlx/backend/cuda/device.cpp",
-        "mlx/mlx/backend/cuda/device_info.cpp",
-        "mlx/mlx/backend/cuda/eval.cpp",
-        "mlx/mlx/backend/cuda/fence.cpp",
-        "mlx/mlx/backend/cuda/indexing.cpp",
-        "mlx/mlx/backend/cuda/jit_module.cpp",
-        "mlx/mlx/backend/cuda/load.cpp",
-        "mlx/mlx/backend/cuda/matmul.cpp",
-        "mlx/mlx/backend/cuda/primitives.cpp",
-        "mlx/mlx/backend/cuda/scaled_dot_product_attention.cpp",
-        "mlx/mlx/backend/cuda/slicing.cpp",
-        "mlx/mlx/backend/cuda/utils.cpp",
-        "mlx/mlx/backend/cuda/worker.cpp",
-
-        "mlx/mlx/backend/cuda/binary",
-        "mlx/mlx/backend/cuda/conv",
-        "mlx/mlx/backend/cuda/copy",
-        "mlx/mlx/backend/cuda/device",
-        "mlx/mlx/backend/cuda/gemms",
-        "mlx/mlx/backend/cuda/quantized",
-        "mlx/mlx/backend/cuda/reduce",
-        "mlx/mlx/backend/cuda/steel",
-        "mlx/mlx/backend/cuda/unary",
-
         // build variants (we are opting _out_ of these)
         "mlx/mlx/io/no_safetensors.cpp",
         "mlx/mlx/io/gguf.cpp",
