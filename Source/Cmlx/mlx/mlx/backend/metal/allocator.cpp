@@ -93,6 +93,35 @@ size_t MetalAllocator::set_wired_limit(size_t limit) {
   return limit;
 };
 
+// Round large allocations up to a coarse geometric bucket so the many distinct
+// sequence-length-dependent buffer sizes collapse into a bounded, reusable set
+// of cache slots. Without this, BufferCache keys each exact byte size separately
+// and the large-buffer reuse tolerance (about one page) never matches across
+// lengths, so the cache accumulates one permanent slot per distinct sequence
+// length and grows toward physical RAM.
+static inline size_t bucketed_alloc_size(size_t size) {
+  // Below 32 KiB the BufferCache reuse window is already 2x (min(2*size,
+  // size + 2*page) resolves to 2*size), so small buffers reuse well without
+  // help. Above it the window collapses to about one page, so distinct
+  // sequence-length-dependent sizes never match. Bucket that regime.
+  constexpr size_t kBucketThreshold = size_t(1) << 15; // 32 KiB
+  if (size <= kBucketThreshold) {
+    return size;
+  }
+  // Keep the top 2 significant bits (quarter-power-of-two size classes): round
+  // up to a granularity of 1/4 the magnitude. Worst-case overhead is 25% of the
+  // allocation, and the number of distinct cache slots is bounded to about 4
+  // per octave instead of one per sequence length. Floor the granularity at
+  // 32 KiB so the 16 KiB page-stepped ramp below 256 KiB also collapses.
+  int high_bit = 63 - __builtin_clzll(size);
+  size_t granularity = size_t(1) << (high_bit - 2);
+  constexpr size_t kMinGranularity = size_t(1) << 15; // 32 KiB
+  if (granularity < kMinGranularity) {
+    granularity = kMinGranularity;
+  }
+  return (size + granularity - 1) & ~(granularity - 1);
+}
+
 Buffer MetalAllocator::malloc(size_t size) {
   // Metal doesn't like empty buffers
   if (size == 0) {
@@ -113,6 +142,10 @@ Buffer MetalAllocator::malloc(size_t size) {
   if (size > vm_page_size) {
     size = vm_page_size * ((size + vm_page_size - 1) / vm_page_size);
   }
+
+  // Collapse large sizes into coarse geometric buckets so distinct
+  // sequence-length-dependent allocations reuse the same cache slots.
+  size = bucketed_alloc_size(size);
 
   // Try the cache
   std::unique_lock lk(mutex_);
