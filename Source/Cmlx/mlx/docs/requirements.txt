@@ -3,3 +3,6 @@ breathe
 sphinx-book-theme
 sphinx-copybutton
 mlx
+# Pin transitive idna above the GHSA-65pc-fj4g-8rjx / PYSEC-2026-215 fix so the
+# vulnerability audit passes; these are documentation-build tools only.
+idna>=3.15
