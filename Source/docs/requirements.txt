@@ -2,4 +2,8 @@ sphinx
 breathe
 sphinx-book-theme
 sphinx-copybutton
-mlx
+# The mlx package is dropped here: it is only needed to build MLX's own Python
+# docs, and osv-scanner cannot resolve it (deps.dev internal error), which fails a
+# dependency audit of this vendored tree. Pin transitive idna above the
+# GHSA-65pc-fj4g-8rjx / PYSEC-2026-215 fix. Documentation-build tools only.
+idna>=3.15
