@@ -92,4 +92,22 @@ class StreamTests: XCTestCase {
         }
     }
 
+    func testDefaultCPUStreamResolvesOnCurrentThread() {
+        _ = StreamOrDevice.cpu
+        let completed = expectation(description: "CPU evaluation completed")
+
+        Thread.detachNewThread {
+            defer { completed.fulfill() }
+
+            let values = MLXArray.ones([3], stream: .cpu)
+            do {
+                try checkedEval(values)
+            } catch {
+                XCTFail("CPU evaluation failed: \(error)")
+            }
+        }
+
+        wait(for: [completed], timeout: 5)
+    }
+
 }
