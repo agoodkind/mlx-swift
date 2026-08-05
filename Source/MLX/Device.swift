@@ -28,19 +28,9 @@ public enum DeviceType: String, Hashable, Sendable {
 public final class Device: @unchecked Sendable, Equatable {
 
     let ctx: mlx_device
-    let defaultStream: Stream
 
     init(_ ctx: mlx_device) {
         self.ctx = ctx
-
-        var deviceType = MLX_GPU
-        mlx_device_get_type(&deviceType, ctx)
-        self.defaultStream =
-            switch deviceType {
-            case MLX_CPU: .cpu
-            case MLX_GPU: .gpu
-            default: .gpu
-            }
     }
 
     public init(_ deviceType: DeviceType, index: Int32 = 0) {
@@ -52,11 +42,6 @@ public final class Device: @unchecked Sendable, Equatable {
             cDeviceType = MLX_GPU
         }
         self.ctx = mlx_device_new_type(cDeviceType, index)
-        self.defaultStream =
-            switch deviceType {
-            case .cpu: .cpu
-            case .gpu: .gpu
-            }
     }
 
     @available(*, deprecated, message: "please use defaultDevice()")
@@ -141,7 +126,7 @@ public final class Device: @unchecked Sendable, Equatable {
 
     /// Return the current default stream.
     static func defaultStream() -> Stream {
-        _tlDefaultDevice.defaultStream
+        Stream.defaultStream(_tlDefaultDevice)
     }
 
     /// Set the default device globally.  Prefer the scoped version, ``withDefaultDevice(_:_:)-17vjl``.
