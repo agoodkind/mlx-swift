@@ -4,6 +4,35 @@
 
 import PackageDescription
 
+#if os(Linux)
+    let cudaBuildPlugins: [Target.PluginUsage] = [
+        .plugin(name: "CudaBuild")
+    ]
+    let cudaPackageDependencies: [Package.Dependency] = [
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.0.0")
+    ]
+    let cudaTargets: [Target] = [
+        .executableTarget(
+            name: "encuda",
+            dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            path: "Source/Encuda",
+        ),
+        .plugin(
+            name: "CudaBuild",
+            capability: .buildTool(),
+            dependencies: [
+                .target(name: "encuda")
+            ],
+        ),
+    ]
+#else
+    let cudaBuildPlugins: [Target.PluginUsage] = []
+    let cudaPackageDependencies: [Package.Dependency] = []
+    let cudaTargets: [Target] = []
+#endif
+
 let noMetalCmlxExcludes = [
     // Exclude Metal backend files, but keep no_metal.cpp for stubs
     // "mlx/mlx/backend/metal/no_metal.cpp",
@@ -287,9 +316,7 @@ let cmlx = Target.target(
         .define("MLX_VERSION", to: "\"0.31.1\""),
     ],
     linkerSettings: linkerSettings,
-    plugins: [
-        .plugin(name: "CudaBuild")
-    ],
+    plugins: cudaBuildPlugins,
 )
 
 let package = Package(
@@ -314,9 +341,8 @@ let package = Package(
     ],
     dependencies: [
         // for Complex type
-        .package(url: "https://github.com/apple/swift-numerics", from: "1.0.0"),
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.0.0"),
-    ],
+        .package(url: "https://github.com/apple/swift-numerics", from: "1.0.0")
+    ] + cudaPackageDependencies,
     targets: [
         cmlx,
         .testTarget(
@@ -412,21 +438,19 @@ let package = Package(
             path: "Source/Examples",
             sources: ["CustomFunctionExampleSimple.swift"]
         ),
+        // Deterministic reproduction of the CompiledFunction/evalLock
+        // lock-order inversion.  A wedged run deadlocks its threads
+        // permanently, so it is deliberately kept out of the test bundle and
+        // built as its own executable.
         .executableTarget(
-            name: "encuda",
-            dependencies: [
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ],
-            path: "Source/Encuda",
+            name: "CompileLockRepro",
+            dependencies: ["MLX"],
+            path: "Source/CompileLockRepro",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
         ),
-        .plugin(
-            name: "CudaBuild",
-            capability: .buildTool(),
-            dependencies: [
-                .target(name: "encuda")
-            ],
-        ),
-    ],
+    ] + cudaTargets,
     cxxLanguageStandard: .gnucxx20
 )
 
