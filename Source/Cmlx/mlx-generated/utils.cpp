@@ -440,8 +440,9 @@ struct complex64_t {
   float imag;
 
   // Constructors
-  constexpr complex64_t(float real, float imag) : real(real), imag(imag) {};
-  constexpr complex64_t() : real(0), imag(0) {};
+  constexpr complex64_t(float real, float imag) thread : real(real),
+                                                         imag(imag) {};
+  constexpr complex64_t() thread : real(0), imag(0) {};
   constexpr complex64_t() threadgroup : real(0), imag(0) {};
 
   // Conversions to complex64_t
@@ -641,7 +642,7 @@ struct os_log {
   constexpr os_log(constant char*, constant char*) constant {}
 
   template <typename... Args>
-  void log_debug(constant char*, Args...) const {}
+  void log_debug(constant char*, Args...) const thread {}
 
   template <typename... Args>
   void log_debug(constant char*, Args...) const constant {}
@@ -856,9 +857,9 @@ struct LoopedElemToLoc {
   OffsetT offset{0};
   int index{0};
 
-  LoopedElemToLoc(int dim) : dim(dim), inner_looper(dim - 1) {}
+  LoopedElemToLoc(int dim) thread : dim(dim), inner_looper(dim - 1) {}
 
-  void next(const constant int* shape, const constant int64_t* strides) {
+  void next(const constant int* shape, const constant int64_t* strides) thread {
     if (dim == 0) {
       return;
     }
@@ -871,7 +872,8 @@ struct LoopedElemToLoc {
     }
   }
 
-  void next(int n, const constant int* shape, const constant int64_t* strides) {
+  void next(int n, const constant int* shape, const constant int64_t* strides)
+      thread {
     if (dim == 0) {
       return;
     }
@@ -894,7 +896,7 @@ struct LoopedElemToLoc {
     }
   }
 
-  OffsetT location() {
+  OffsetT location() thread {
     return offset;
   }
 };
@@ -905,9 +907,9 @@ struct LoopedElemToLoc<1, OffsetT, true> {
   OffsetT offset{0};
   uint index{0};
 
-  LoopedElemToLoc(int dim) : dim(dim) {}
+  LoopedElemToLoc(int dim) thread : dim(dim) {}
 
-  void next(const constant int* shape, const constant int64_t* strides) {
+  void next(const constant int* shape, const constant int64_t* strides) thread {
     index++;
     if (dim > 1) {
       offset = elem_to_loc<OffsetT>(index, shape, strides, dim);
@@ -916,7 +918,8 @@ struct LoopedElemToLoc<1, OffsetT, true> {
     }
   }
 
-  void next(int n, const constant int* shape, const constant int64_t* strides) {
+  void next(int n, const constant int* shape, const constant int64_t* strides)
+      thread {
     index += n;
     if (dim > 1) {
       offset = elem_to_loc<OffsetT>(index, shape, strides, dim);
@@ -925,7 +928,7 @@ struct LoopedElemToLoc<1, OffsetT, true> {
     }
   }
 
-  OffsetT location() {
+  OffsetT location() thread {
     return offset;
   }
 };
@@ -934,17 +937,18 @@ template <typename OffsetT>
 struct LoopedElemToLoc<1, OffsetT, false> {
   OffsetT offset{0};
 
-  LoopedElemToLoc(int) {}
+  LoopedElemToLoc(int) thread {}
 
-  void next(const constant int*, const constant int64_t* strides) {
+  void next(const constant int*, const constant int64_t* strides) thread {
     offset += OffsetT(strides[0]);
   }
 
-  void next(int n, const constant int*, const constant int64_t* strides) {
+  void next(int n, const constant int*, const constant int64_t* strides)
+      thread {
     offset += n * OffsetT(strides[0]);
   }
 
-  OffsetT location() {
+  OffsetT location() thread {
     return offset;
   }
 };
