@@ -26,10 +26,16 @@ jobs:
       - name: Checkout SwiftLM (Parent Repo)
         uses: actions/checkout@v4
         with:
-          repository: SharpAI/SwiftLM
+          repository: agoodkind/SwiftLM
+          ref: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
           path: SwiftLM
           token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
+
+      - name: Pin mlx-swift-lm submodule
+        run: |
+          git -C SwiftLM/mlx-swift-lm fetch --quiet origin a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
+          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
 
       - name: Show selected Xcode toolchain
         run: |

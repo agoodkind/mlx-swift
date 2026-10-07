@@ -11,7 +11,7 @@ permissions:
 jobs:
   integration-test:
     name: Build & Test SwiftLM
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
@@ -22,19 +22,27 @@ jobs:
       - name: Checkout SwiftLM
         uses: actions/checkout@v4
         with:
-          repository: SharpAI/SwiftLM
+          repository: agoodkind/SwiftLM
+          ref: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
           path: SwiftLM
           submodules: recursive
+
+      - name: Pin mlx-swift-lm submodule
+        run: |
+          git -C SwiftLM/mlx-swift-lm fetch --quiet origin a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
+          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
 
       - name: Redirect Dependencies to Local Form
         run: |
           # Point SwiftLM to the local checkout of mlx-swift PR branch
           sed -i '' -E 's|\.package\(url: "https://github.com/SharpAI/mlx-swift\.git".*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
           sed -i '' -E 's|\.package\(url: "https://github.com/ml-explore/mlx-swift\.git".*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
+          sed -i '' -E 's|\.package\(path: "\./mlx-swift"\).*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
           
           # Point the inner mlx-swift-lm submodule to the local checkout of mlx-swift PR branch
           sed -i '' -E 's|\.package\(url: "https://github.com/SharpAI/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
           sed -i '' -E 's|\.package\(url: "https://github.com/ml-explore/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
+          sed -i '' -E 's|\.package\(url: "https://github.com/agoodkind/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
           
       - name: Build SwiftLM
         run: |
