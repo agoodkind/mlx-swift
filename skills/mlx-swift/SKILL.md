@@ -62,8 +62,12 @@ import MLX
 // Create arrays
 let a = MLXArray([1, 2, 3, 4])
 let b = MLXArray(0 ..< 12, [3, 4])  // Shape [3, 4]
-let c = MLXArray.zeros([2, 3])
-let d = MLXArray.ones([4, 4], dtype: .float32)
+
+// Nested arrays give the shape directly (any depth)
+let c = MLXArray([[1, 2, 3], [4, 5, 6]])  // Shape [2, 3]
+
+let d = MLXArray.zeros([2, 3])
+let e = MLXArray.ones([4, 4], dtype: .float32)
 
 // Random arrays (use MLXRandom namespace or free functions)
 let uniform = MLXRandom.uniform(0.0 ..< 1.0, [3, 3])
@@ -340,8 +344,12 @@ let compiledOp = compile { (a: MLXArray, b: MLXArray) -> MLXArray in
 // Use compiled version
 let output = compiledOp(arrayA, arrayB)
 
-// Note: compile() works best with pure MLXArray functions.
-// For models, call model methods directly (they can use internal compilation).
+// compile() also supports compiling a Module/Optimizer training step: pass
+// them via inputs:/outputs: (they conform to Updatable) so compile observes
+// in-place updates (e.g. optimizer.update(model:gradients:), LoRA weight swaps).
+// If a captured Module/Optimizer is left out of inputs:/outputs:, compile()
+// silently freezes its parameter values at trace time -- see
+// references/transforms.md for the full pitfall and example.
 ```
 
 ## Quaternary Workflow: Wired Memory Coordination
