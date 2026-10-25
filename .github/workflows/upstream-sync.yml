@@ -30,7 +30,7 @@ jobs:
         run: apt-get install --yes --no-install-recommends make curl
 
       - name: Verify the fixed Swift upstream sync commands
-        uses: agoodkind/lmd/.github/actions/setup-maintenance@2812aa0d79c00cda8185e11182e98ddea59eb6be
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@ec18740170edb9c5c2216a9c6fe2789c3d9926b4
         with:
           ref: '2812aa0d79c00cda8185e11182e98ddea59eb6be'
           test-filter: UpstreamSyncTests
@@ -63,7 +63,7 @@ jobs:
 
       - name: Set up the fixed Swift upstream sync commands
         id: maintenance
-        uses: agoodkind/lmd/.github/actions/setup-maintenance@2812aa0d79c00cda8185e11182e98ddea59eb6be
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@ec18740170edb9c5c2216a9c6fe2789c3d9926b4
         with:
           ref: '2812aa0d79c00cda8185e11182e98ddea59eb6be'
           test-filter: UpstreamSyncTests
