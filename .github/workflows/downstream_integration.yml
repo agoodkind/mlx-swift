@@ -2,8 +2,19 @@ name: Downstream Integration Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      swiftlm_ref:
+        description: Exact SwiftLM commit to validate
+        type: string
+        required: true
+        default: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+      mlx_swift_lm_ref:
+        description: Exact mlx-swift-lm commit to validate
+        type: string
+        required: true
+        default: 74ebe55d0d68de121f730334412da01a539eba50
 
 permissions:
   contents: read
@@ -15,67 +26,95 @@ jobs:
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || '53ae5b0da17f1b4484de4c01370e0ceb5a4fe079' }}
+      MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '74ebe55d0d68de121f730334412da01a539eba50' }}
+      SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests)'
     steps:
-      - name: Checkout PR branch (mlx-swift)
+      - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           path: mlx-swift-pr
           submodules: recursive
+          persist-credentials: false
 
-      - name: Checkout SwiftLM (Parent Repo)
+      - name: Checkout SwiftLM
         uses: actions/checkout@v4
         with:
           repository: agoodkind/SwiftLM
-          ref: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+          ref: ${{ env.SWIFTLM_REF }}
           path: SwiftLM
-          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
-      - name: Pin mlx-swift-lm submodule
+      - name: Select exact dependency commits
         run: |
-          git -C SwiftLM/mlx-swift-lm fetch --quiet origin a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
-          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
+          if [[ ! "$SWIFTLM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set swiftlm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          if [[ ! "$MLX_SWIFT_LM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set mlx_swift_lm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          test "$(git -C SwiftLM rev-parse HEAD)" = "$SWIFTLM_REF"
+          git -C SwiftLM/mlx-swift-lm fetch --quiet origin "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach "$MLX_SWIFT_LM_REF"
+          test "$(git -C SwiftLM/mlx-swift-lm rev-parse HEAD)" = "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift fetch --quiet --no-tags --depth=1 "$GITHUB_WORKSPACE/mlx-swift-pr" HEAD
+          git -C SwiftLM/mlx-swift checkout --quiet --detach FETCH_HEAD
+          test "$(git -C SwiftLM/mlx-swift rev-parse HEAD)" = "$(git -C mlx-swift-pr rev-parse HEAD)"
+          git -C SwiftLM rev-parse HEAD
+          git -C SwiftLM/mlx-swift rev-parse HEAD
+          git -C SwiftLM/mlx-swift-lm rev-parse HEAD
 
-      - name: Show selected Xcode toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-          xcodebuild -showComponent MetalToolchain || true
-
-      - name: Resolve Dependencies (to populate SPM cache)
-        run: swift package resolve
+      - name: Build SwiftLM and tests in Debug
         working-directory: SwiftLM
+        run: swift build --build-system native --jobs 4 --build-tests
 
-      - name: Override mlx-swift dependency with PR checkout
-        # SwiftLM uses mlx-swift as a local path dependency (./mlx-swift submodule).
-        # SPM `package edit` cannot edit path dependencies, so we directly overwrite
-        # the submodule directory with our PR branch content.
+      - name: Build Metal library from the selected core checkout
         run: |
-          rsync -a --delete "$GITHUB_WORKSPACE/mlx-swift-pr/" "$GITHUB_WORKSPACE/SwiftLM/mlx-swift/"
-        working-directory: SwiftLM
+          xcodebuild -downloadComponent MetalToolchain
+          mkdir -p "$RUNNER_TEMP/mlx-metallib/lib"
+          cmake -S mlx-swift-pr/Source/Cmlx/mlx -B "$RUNNER_TEMP/mlx-metallib" \
+            -DCMAKE_BUILD_TYPE=Release -DMLX_METAL_JIT=OFF \
+            -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+            -DMLX_METAL_PATH="$RUNNER_TEMP/mlx-metallib/lib"
+          cmake --build "$RUNNER_TEMP/mlx-metallib" --target mlx-metallib --parallel 4
+          KERNEL_BUILD="$RUNNER_TEMP/mlx-metallib/mlx/backend/metal/kernels"
+          if [[ -f "$KERNEL_BUILD/steel_gemm_fused_nax.air" ]]; then
+            mkdir -p "$RUNNER_TEMP/mlx-metallib/nax"
+            for kernel in steel_gemm_fused_nax steel_gemm_splitk_nax steel_gemm_gather_nax steel_gemm_segmented_nax steel_attention_nax quantized_nax fp_quantized_nax; do
+              xcrun -sdk macosx metal -mmacosx-version-min="$(sw_vers -productVersion)" \
+                "$KERNEL_BUILD/$kernel.air" -o "$RUNNER_TEMP/mlx-metallib/nax/$kernel.metallib"
+            done
+          else
+            echo "CMake did not enable NAX kernels for this SDK and deployment target."
+          fi
 
-      - name: Install MLX Metal library
+      - name: Colocate Metal libraries with the binary and test runner
+        working-directory: SwiftLM
         run: |
-          python3 -m venv /tmp/mlx_venv
-          /tmp/mlx_venv/bin/pip install --quiet mlx
-          METALLIB=$(echo /tmp/mlx_venv/lib/python*/site-packages/mlx/lib/mlx.metallib)
-          # Make it available system-wide for all subsequent steps
-          sudo cp "$METALLIB" /usr/local/lib/mlx.metallib || true
-          echo "MLX_METAL_LIB=$METALLIB" >> "$GITHUB_ENV"
+          BIN_DIR=$(swift build --build-system native --show-bin-path)
+          cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$BIN_DIR/mlx.metallib"
+          for test_bundle in "$BIN_DIR"/*.xctest; do
+            cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$test_bundle/Contents/MacOS/mlx.metallib"
+            if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+              cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$test_bundle/Contents/MacOS/nax"
+            fi
+          done
+          if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+            cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$BIN_DIR/nax"
+          fi
 
-      - name: Build SwiftLM
-        run: swift build --build-tests
+      - name: Run tests without pretrained models
         working-directory: SwiftLM
-
-      - name: Copy Metal library to build outputs
         run: |
-          METALLIB="$MLX_METAL_LIB"
-          # Copy to all locations the test runner and linked bundles may search
-          find SwiftLM/.build -type d \( -name "debug" -o -name "release" \) -exec cp "$METALLIB" {}/ \; 2>/dev/null || true
-          find SwiftLM/.build -name "*.xctest" -exec cp "$METALLIB" {}/Contents/MacOS/ \; 2>/dev/null || true
-          find SwiftLM/.build -name "*Tests" -type f -exec sh -c 'cp "'"$METALLIB"'" "$(dirname "${1}")/"' _ {} \; 2>/dev/null || true
-
-      - name: Run SwiftLM Integration Tests
-        run: swift test --parallel --skip-build
-        working-directory: SwiftLM
+          swift test --build-system native --jobs 4 list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
+          for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests; do
+            if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
+              echo "::error::The selected SwiftLM commit does not provide $test_class."
+              exit 1
+            fi
+          done
+          swift test --build-system native --jobs 4 --skip-build --filter "$SWIFTLM_TEST_FILTER"

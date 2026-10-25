@@ -8,6 +8,51 @@ permissions:
   contents: read
 
 jobs:
+  fork_regression_tests:
+    name: Fork Regression Tests
+    if: github.repository == 'agoodkind/mlx-swift'
+    runs-on: macos-26
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - name: Checkout core candidate
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Prepare Xcode and Metal toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodebuild -downloadComponent MetalToolchain
+
+      - name: Run focused core regressions
+        run: |
+          xcodebuild test \
+            -scheme mlx-swift-Package \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/mlx-core-derived" \
+            -resultBundlePath "$RUNNER_TEMP/core-fork-regressions.xcresult" \
+            -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            -jobs 4 \
+            -only-testing:MLXTests/ForkProtectionTests \
+            -only-testing:MLXTests/StreamTests/testDefaultCPUStreamResolvesOnCurrentThread \
+            -only-testing:MLXTests/StreamTests/testGPUArrayEvaluatesOnAnotherThread \
+            -only-testing:MLXTests/LoggingTests \
+            -only-testing:MLXTests/CompileLockOrderingTests
+
+      - name: Upload core regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fork-regressions
+          path: ${{ runner.temp }}/core-fork-regressions.xcresult
+          if-no-files-found: error
+
   lint:
     if: github.repository == 'ml-explore/mlx-swift'
     runs-on: ubuntu-latest

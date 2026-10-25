@@ -4,6 +4,29 @@ on:
   pull_request:
   push:
   workflow_dispatch:
+    inputs:
+      swiftlm_ref:
+        description: Exact SwiftLM commit to validate
+        type: string
+        required: true
+        default: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+      mlx_swift_lm_ref:
+        description: Exact mlx-swift-lm commit to validate
+        type: string
+        required: true
+        default: 74ebe55d0d68de121f730334412da01a539eba50
+      run_speculative_eval:
+        description: Download both models for speculative decoding evaluation (15-minute limit)
+        type: boolean
+        default: false
+      main_model:
+        description: Main model downloaded only for the optional speculative evaluation
+        type: string
+        default: mlx-community/Qwen3.5-9B-4bit
+      draft_model:
+        description: Draft model downloaded only for the optional speculative evaluation
+        type: string
+        default: mlx-community/Qwen3.5-0.8B-MLX-4bit
 
 permissions:
   contents: read
@@ -12,64 +35,108 @@ jobs:
   integration-test:
     name: Build & Test SwiftLM
     runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || '53ae5b0da17f1b4484de4c01370e0ceb5a4fe079' }}
+      MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '74ebe55d0d68de121f730334412da01a539eba50' }}
+      SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests)'
     steps:
       - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
         with:
           path: mlx-swift
           submodules: recursive
+          persist-credentials: false
 
       - name: Checkout SwiftLM
         uses: actions/checkout@v4
         with:
           repository: agoodkind/SwiftLM
-          ref: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+          ref: ${{ env.SWIFTLM_REF }}
           path: SwiftLM
           submodules: recursive
+          persist-credentials: false
 
-      - name: Pin mlx-swift-lm submodule
+      - name: Select exact dependency commits
         run: |
-          git -C SwiftLM/mlx-swift-lm fetch --quiet origin a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
-          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
+          if [[ ! "$SWIFTLM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set swiftlm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          if [[ ! "$MLX_SWIFT_LM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set mlx_swift_lm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          test "$(git -C SwiftLM rev-parse HEAD)" = "$SWIFTLM_REF"
+          git -C SwiftLM/mlx-swift-lm fetch --quiet origin "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach "$MLX_SWIFT_LM_REF"
+          test "$(git -C SwiftLM/mlx-swift-lm rev-parse HEAD)" = "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift fetch --quiet --no-tags --depth=1 "$GITHUB_WORKSPACE/mlx-swift" HEAD
+          git -C SwiftLM/mlx-swift checkout --quiet --detach FETCH_HEAD
+          test "$(git -C SwiftLM/mlx-swift rev-parse HEAD)" = "$(git -C mlx-swift rev-parse HEAD)"
+          git -C SwiftLM rev-parse HEAD
+          git -C SwiftLM/mlx-swift rev-parse HEAD
+          git -C SwiftLM/mlx-swift-lm rev-parse HEAD
 
-      - name: Redirect Dependencies to Local Form
-        run: |
-          # Point SwiftLM to the local checkout of mlx-swift PR branch
-          sed -i '' -E 's|\.package\(url: "https://github.com/SharpAI/mlx-swift\.git".*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
-          sed -i '' -E 's|\.package\(url: "https://github.com/ml-explore/mlx-swift\.git".*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
-          sed -i '' -E 's|\.package\(path: "\./mlx-swift"\).*|\.package(path: "../mlx-swift"),|' SwiftLM/Package.swift
-          
-          # Point the inner mlx-swift-lm submodule to the local checkout of mlx-swift PR branch
-          sed -i '' -E 's|\.package\(url: "https://github.com/SharpAI/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
-          sed -i '' -E 's|\.package\(url: "https://github.com/ml-explore/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
-          sed -i '' -E 's|\.package\(url: "https://github.com/agoodkind/mlx-swift\.git".*|\.package(path: "../../mlx-swift"),|' SwiftLM/mlx-swift-lm/Package.swift
-          
-      - name: Build SwiftLM
-        run: |
-          cd SwiftLM
-          swift build -c release
+      - name: Build SwiftLM and tests in Release
+        working-directory: SwiftLM
+        run: swift build --build-system native --jobs 4 -c release --build-tests
 
-      - name: Install MLX Metal library (matching pinned version)
+      - name: Build Metal library from the selected core checkout
         run: |
-          # Extract the exact mlx-swift version pinned in SwiftLM/Package.swift
-          # and install the matching Python mlx wheel — it ships the same metallib
-          PINNED=$(grep -E 'mlx-swift.*exact:' SwiftLM/Package.swift | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"' | head -1)
-          echo "SwiftLM pins mlx-swift at: ${PINNED:-latest}"
-
-          python3 -m venv /tmp/mlx_venv
-          if [ -n "$PINNED" ]; then
-            /tmp/mlx_venv/bin/pip install --quiet "mlx==$PINNED" || \
-            /tmp/mlx_venv/bin/pip install --quiet mlx  # fallback to latest
+          xcodebuild -downloadComponent MetalToolchain
+          mkdir -p "$RUNNER_TEMP/mlx-metallib/lib"
+          cmake -S mlx-swift/Source/Cmlx/mlx -B "$RUNNER_TEMP/mlx-metallib" \
+            -DCMAKE_BUILD_TYPE=Release -DMLX_METAL_JIT=OFF \
+            -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+            -DMLX_METAL_PATH="$RUNNER_TEMP/mlx-metallib/lib"
+          cmake --build "$RUNNER_TEMP/mlx-metallib" --target mlx-metallib --parallel 4
+          KERNEL_BUILD="$RUNNER_TEMP/mlx-metallib/mlx/backend/metal/kernels"
+          if [[ -f "$KERNEL_BUILD/steel_gemm_fused_nax.air" ]]; then
+            mkdir -p "$RUNNER_TEMP/mlx-metallib/nax"
+            for kernel in steel_gemm_fused_nax steel_gemm_splitk_nax steel_gemm_gather_nax steel_gemm_segmented_nax steel_attention_nax quantized_nax fp_quantized_nax; do
+              xcrun -sdk macosx metal -mmacosx-version-min="$(sw_vers -productVersion)" \
+                "$KERNEL_BUILD/$kernel.air" -o "$RUNNER_TEMP/mlx-metallib/nax/$kernel.metallib"
+            done
           else
-            /tmp/mlx_venv/bin/pip install --quiet mlx
+            echo "CMake did not enable NAX kernels for this SDK and deployment target."
           fi
 
-          MLX_LIB=$(find /tmp/mlx_venv -name "mlx.metallib" | head -1)
-          echo "Found metallib: $MLX_LIB"
-          cp "$MLX_LIB" SwiftLM/.build/release/mlx.metallib
-          echo "Installed mlx.metallib -> SwiftLM/.build/release/"
-
-      - name: Run Speculative Decoding Tests
+      - name: Colocate Metal libraries with the binary and test runner
+        working-directory: SwiftLM
         run: |
-          cd SwiftLM
-          bash tests/test-speculative-eval.sh
+          BIN_DIR=$(swift build --build-system native -c release --show-bin-path)
+          cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$BIN_DIR/mlx.metallib"
+          for test_bundle in "$BIN_DIR"/*.xctest; do
+            cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$test_bundle/Contents/MacOS/mlx.metallib"
+            if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+              cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$test_bundle/Contents/MacOS/nax"
+            fi
+          done
+          if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+            cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$BIN_DIR/nax"
+          fi
+          echo "SWIFTLM_BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
+
+      - name: Run tests without pretrained models
+        working-directory: SwiftLM
+        run: |
+          swift test --build-system native --jobs 4 -c release list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
+          for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests; do
+            if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
+              echo "::error::The selected SwiftLM commit does not provide $test_class."
+              exit 1
+            fi
+          done
+          swift test --build-system native --jobs 4 -c release --skip-build --filter "$SWIFTLM_TEST_FILTER"
+
+      - name: Run optional pretrained speculative decoding evaluation
+        if: github.event_name == 'workflow_dispatch' && inputs.run_speculative_eval
+        timeout-minutes: 15
+        working-directory: SwiftLM
+        env:
+          MAIN_MODEL: ${{ inputs.main_model }}
+          DRAFT_MODEL: ${{ inputs.draft_model }}
+        run: bash tests/test-speculative-eval.sh "$SWIFTLM_BIN_DIR/SwiftLM"
