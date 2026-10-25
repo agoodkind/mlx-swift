@@ -70,7 +70,7 @@ jobs:
 
   fork_regression_tests:
     name: Fork Regression Tests
-    if: ${{ always() && (github.repository == 'agoodkind/mlx-swift') }}
+    if: ${{ !cancelled() && (github.repository == 'agoodkind/mlx-swift') }}
     needs: select_macos_runner
     runs-on: ${{ needs.select_macos_runner.outputs.label || 'ubuntu-latest' }}
     timeout-minutes: 40

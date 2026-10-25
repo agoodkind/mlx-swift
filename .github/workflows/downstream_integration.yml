@@ -69,7 +69,7 @@ jobs:
   test-swiftlm-umbrella:
     name: Test with SwiftLM (Umbrella Repo)
     needs: select_macos_runner
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ${{ needs.select_macos_runner.outputs.label || 'ubuntu-latest' }}
     timeout-minutes: 40
     env:
