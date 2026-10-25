@@ -74,11 +74,8 @@ extension Encuda {
                 arguments += inputFiles
                 arguments += ["-o", output]
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: resolvedNvcc)
-                process.arguments = arguments
-                try process.run()
-                let status = process.waitForExitStatus()
+                let status = try runTool(
+                    executable: URL(fileURLWithPath: resolvedNvcc), arguments: arguments)
                 guard status == 0 else {
                     throw EncudaError.nvccFailed(status)
                 }

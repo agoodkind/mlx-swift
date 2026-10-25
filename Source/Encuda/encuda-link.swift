@@ -81,11 +81,9 @@ extension Encuda {
 
         func nvcc(args: [String]) throws {
             #if os(macOS) || os(Linux)
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: resolvedNvcc)
-                process.arguments = ["-ccbin=\(resolvedClangpp)"] + (verbose ? ["-v"] : []) + args
-                try process.run()
-                let status = process.waitForExitStatus()
+                let status = try runTool(
+                    executable: URL(fileURLWithPath: resolvedNvcc),
+                    arguments: ["-ccbin=\(resolvedClangpp)"] + (verbose ? ["-v"] : []) + args)
                 guard status == 0 else {
                     throw EncudaError.nvccFailed(status)
                 }
@@ -94,11 +92,9 @@ extension Encuda {
 
         func clang(args: [String]) throws {
             #if os(macOS) || os(Linux)
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: resolvedClangpp)
-                process.arguments = (verbose ? ["-v"] : []) + args
-                try process.run()
-                let status = process.waitForExitStatus()
+                let status = try runTool(
+                    executable: URL(fileURLWithPath: resolvedClangpp),
+                    arguments: (verbose ? ["-v"] : []) + args)
                 guard status == 0 else {
                     throw EncudaError.clangFailed(status)
                 }
