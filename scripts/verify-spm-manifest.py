@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import json
 import platform
 import subprocess
+
+CUDA_PLUGIN_NAME = "CudaBuild"
 
 
 def require(condition: bool, message: str) -> None:
@@ -26,8 +30,9 @@ dependencies = {
     if "sourceControl" in dependency
 }
 
-cuda_targets = {"CudaBuild", "encuda"}
+cuda_targets = {CUDA_PLUGIN_NAME, "encuda"}
 cuda_plugin_usages = targets["Cmlx"].get("pluginUsages") or []
+cuda_plugin_names = {usage["plugin"][0] for usage in cuda_plugin_usages}
 
 if platform.system() == "Linux":
     require(
@@ -38,7 +43,7 @@ if platform.system() == "Linux":
         "Linux manifest is missing the CUDA helper dependency",
     )
     require(
-        cuda_plugin_usages,
+        CUDA_PLUGIN_NAME in cuda_plugin_names,
         "Linux Cmlx target is missing the CUDA build plugin",
     )
 else:
@@ -51,7 +56,7 @@ else:
         "non-Linux manifest unexpectedly contains the CUDA helper dependency",
     )
     require(
-        not cuda_plugin_usages,
+        CUDA_PLUGIN_NAME not in cuda_plugin_names,
         "non-Linux Cmlx target unexpectedly uses the CUDA build plugin",
     )
 
