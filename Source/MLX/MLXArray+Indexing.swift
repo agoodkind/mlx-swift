@@ -531,7 +531,8 @@ func getItem(src: MLXArray, operation: MLXArrayIndexOperation, stream: StreamOrD
 {
     switch operation {
     case .ellipsis:
-        return src
+        // A full-range slice must preserve the source when the result changes.
+        return getItemND(src: src, operations: [operation], stream: stream)
 
     case .newAxis:
         return src.expandedDimensions(axis: 0, stream: stream)

@@ -39,6 +39,7 @@ jobs:
             -skipPackagePluginValidation \
             -parallel-testing-enabled NO \
             -jobs 4 \
+            -only-testing:MLXTests/MLXArrayIndexingTests \
             -only-testing:MLXTests/ForkProtectionTests \
             -only-testing:MLXTests/StreamTests/testDefaultCPUStreamResolvesOnCurrentThread \
             -only-testing:MLXTests/StreamTests/testGPUArrayEvaluatesOnAnotherThread \
