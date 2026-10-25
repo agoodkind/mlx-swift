@@ -1,19 +1,42 @@
 name: 🔄 Auto-Sync Upstream
 
 on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
   schedule:
     - cron: '0 4 * * *' # Every day at 4:00 AM UTC
   workflow_dispatch: # Enable manual triggers
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+permissions: {}
 
 jobs:
-  sync:
+  regression:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Test upstream synchronization
+        run: node --test .github/scripts/upstream-sync.test.mjs
+
+  sync:
+    needs: regression
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: upstream-sync
+      cancel-in-progress: false
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -26,76 +49,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Add Upstream Remote
-        run: git remote add upstream https://github.com/ml-explore/mlx-swift.git
+      - name: Configure Git credentials
+        env:
+          GH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
+        run: gh auth setup-git --hostname github.com
 
-      - name: Fetch Upstream
-        run: git fetch upstream
-
-      - name: Create or Update Sync Branch
+      - name: Update upstream candidate
         id: sync_branch
         env:
-          SYNC_PUSH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
-        run: |
-          git checkout -B sync/upstream-latest origin/main
+          GH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
+          SYNC_UPSTREAM_URL: https://github.com/ml-explore/mlx-swift.git
+        run: node .github/scripts/upstream-sync.mjs sync
 
-          # Only sync when upstream/main has commits the fork does not already have.
-          if [ -z "$(git rev-list origin/main..upstream/main)" ]; then
-            echo "has_changes=false" >> "$GITHUB_OUTPUT"
-            echo "No new upstream commits."
-            exit 0
-          fi
-
-          # Merge upstream, but let the fork win conflicting hunks (-X ours) so the
-          # branch keeps the fork's necessary build wiring (Linux backend excludes,
-          # vendored mlx/mlx-c, the turbo/fast/fp8/ssd feature config in Package.swift)
-          # and stays buildable. A genuine vendored-core bump is manual work; this
-          # carries upstream's non-conflicting changes forward for review.
-          git merge -X ours --no-edit -m "chore: sync with upstream/main [skip ci]" upstream/main
-
-          # Flag when upstream's new commits touched the build manifest, so the
-          # manual core bump is not silently skipped during PR review.
-          if [ -n "$(git log --format=%H origin/main..upstream/main -- Package.swift Package.resolved)" ]; then
-            echo "pkg_changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "pkg_changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
-          echo "has_changes=true" >> "$GITHUB_OUTPUT"
-          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git push -f "https://x-access-token:${SYNC_PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" sync/upstream-latest
-
-      - name: Create Pull Request to Main
+      - name: Create or update pull request
         if: steps.sync_branch.outputs.has_changes == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          EXISTING_PR_NUMBER=$(gh api \
-            --method GET \
-            "/repos/${GITHUB_REPOSITORY}/pulls" \
-            -f base=main \
-            -f head="${GITHUB_REPOSITORY_OWNER}:sync/upstream-latest" \
-            -f state=open \
-            --jq '.[0].number // empty')
-
-          if [[ -n "$EXISTING_PR_NUMBER" ]]; then
-            echo "PR #$EXISTING_PR_NUMBER already exists for sync/upstream-latest."
-            exit 0
-          fi
-
-          PR_BODY="Automated PR to synchronize the fork with Apple mlx-swift upstream. The merge uses -X ours, so the fork build config wins on conflict and the branch stays buildable. Verify CI pipelines."
-          if [[ "${{ steps.sync_branch.outputs.pkg_changed }}" == "true" ]]; then
-            PR_BODY="${PR_BODY}"$'\n\n'"WARNING: upstream changed Package.swift or Package.resolved in this range. -X ours kept the fork build wiring, so a vendored-mlx core bump may be needed manually (3-way merge fast.cpp, regenerate JIT kernels, patch core API changes). Review before merging."
-          fi
-
-          gh api \
-            --method POST \
-            "/repos/${GITHUB_REPOSITORY}/pulls" \
-            -f base=main \
-            -f head="${GITHUB_REPOSITORY_OWNER}:sync/upstream-latest" \
-            -f title="🔄 Auto-Sync: Apple Upstream Repository" \
-            -f body="$PR_BODY" \
-            --jq '.html_url'
+          GH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
+        run: node .github/scripts/upstream-sync.mjs pr
 
       - name: Dispatch Sync Branch Validation
         if: steps.sync_branch.outputs.has_changes == 'true'
