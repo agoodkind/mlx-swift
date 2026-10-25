@@ -31,6 +31,7 @@ const char* scan();
 const char* scatter_axis();
 const char* softmax();
 const char* sort();
+const char* searchsorted();
 const char* reduce();
 
 const char* gemm();
@@ -43,6 +44,7 @@ const char* conv();
 const char* steel_conv();
 const char* steel_conv_3d();
 const char* steel_conv_general();
+const char* gemv();
 const char* gemv_masked();
 const char* steel_attention();
 

@@ -19,12 +19,6 @@ const char* gemm_nax() {
 #define STEEL_PRAGMA_NO_UNROLL _Pragma("clang loop unroll(disable)")
 
 ///////////////////////////////////////////////////////////////////////////////
-// Contents from "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.42.0.AFwds6/Metal.xctoolchain/usr/metal/32023/lib/clang/32023.883/include/metal/__exec/units.h"
-///////////////////////////////////////////////////////////////////////////////
-
-#line 1 "/private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.42.0.AFwds6/Metal.xctoolchain/usr/metal/32023/lib/clang/32023.883/include/metal/__exec/units.h"
-
-///////////////////////////////////////////////////////////////////////////////
 // Contents from "mlx/backend/metal/kernels/steel/utils/type_traits.h"
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1360,11 +1354,17 @@ auto gemm_loop(
   NAXTile<AccumType, TM, TN> Dtile;
   Dtile.clear();
 
+  const bool has_output = sgp_sm > 0 && sgp_sn > 0;
+
   int gemm_k_iterations_ = gemm_k_iterations_aligned;
 
   STEEL_PRAGMA_NO_UNROLL
   for (int kk0 = 0; kk0 < gemm_k_iterations_; kk0++) {
     threadgroup_barrier(mem_flags::mem_none);
+    if constexpr (!kAlignedM || !kAlignedN) {
+      if (!has_output)
+        continue;
+    }
 
     STEEL_PRAGMA_NO_UNROLL
     for (int kk1 = 0; kk1 < BK; kk1 += SK) {
@@ -1409,6 +1409,10 @@ auto gemm_loop(
 
   if constexpr (!kAlignedK) {
     simdgroup_barrier(mem_flags::mem_none);
+    if constexpr (!kAlignedM || !kAlignedN) {
+      if (!has_output)
+        return Dtile;
+    }
 
     const short rem_bk = K - gemm_k_iterations_ * BK;
 

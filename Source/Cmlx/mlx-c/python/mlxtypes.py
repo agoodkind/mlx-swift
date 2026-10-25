@@ -32,6 +32,11 @@ for t in [
         "Group",
     ],
     [
+        "mlx_node_namer",
+        "mlx::core::NodeNamer",
+        "NodeNamer",
+    ],
+    [
         "mlx_closure",
         "std::function<std::vector<array>(std::vector<array>)>",
     ],
@@ -54,6 +59,11 @@ for t in [
         "mlx_closure_custom_vmap",
         "std::function<std::pair<std::vector<mlx::core::array>, std::vector<int>>(std::vector<mlx::core::array>,std::vector<int>)>",
         "std::function<std::pair<std::vector<array>, std::vector<int>>(std::vector<array>,std::vector<int>)>",
+    ],
+    [
+        "mlx_compile_cache",
+        "std::weak_ptr<mlx::core::detail::CompileCache>",
+        "CompileCacheWeakPtr",
     ],
 ]:
     if len(t) == 2:
@@ -413,14 +423,30 @@ types.append(
 
 types.append(
     {
+        "cpp": "mlx::core::fft::FFTNorm",
+        "alt": "FFTNorm",
+        "c": "mlx_fft_norm",
+        "c_to_cpp": lambda s: "mlx_fft_norm_to_cpp(" + s + ")",
+        "c_arg": lambda s, untyped=False: s if untyped else "mlx_fft_norm " + s,
+        "c_return_arg": lambda s, untyped=False: (
+            s if untyped else "mlx_fft_norm* " + s
+        ),
+        "c_new": lambda s: "mlx_fft_norm " + s,
+        "free": lambda s: "",
+        "c_assign_from_cpp": lambda d, s: d + " = " + "mlx_fft_norm_to_c(" + s + ")",
+    }
+)
+
+types.append(
+    {
         "cpp": "std::string",
         "alt": "std::string",
         "c_to_cpp": lambda s: "std::string(" + s + ")",
         "c_arg": lambda s, untyped=False: s if untyped else "const char* " + s,
-        "c_return_arg": lambda s, untyped=False: s if untyped else "char** " + s,
+        "c_return_arg": lambda s, untyped=False: s if untyped else "mlx_string* " + s,
         # "c_new": lambda s: "char* " + s,
         # "free": lambda s: "",
-        "c_assign_from_cpp": lambda d, s: d + " = " + s + ".c_str()",
+        "c_assign_from_cpp": lambda d, s: "mlx_string_set_(*" + d + ", " + s + ")",
     }
 )
 
@@ -437,6 +463,16 @@ types.append(
         "cpp": "std::shared_ptr<io::Writer>",
         "c_to_cpp": lambda s: "mlx_io_writer_get_(" + s + ")",
         "c_arg": lambda s, untyped=False: s if untyped else "mlx_io_writer " + s,
+    }
+)
+
+types.append(
+    {
+        "cpp": "std::ostream",
+        "c_to_cpp": lambda s: "CFileOutputStream::as_lvalue(CFileOutputStream("
+        + s
+        + "))",
+        "c_arg": lambda s, untyped=False: s if untyped else "FILE* " + s,
     }
 )
 

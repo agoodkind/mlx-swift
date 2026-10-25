@@ -51,6 +51,27 @@ public enum GPU {
         Memory.peakMemory
     }
 
+    /// The metallib override path.  This can be set early in the process to override or provide
+    /// the metallib load path.
+    public static var metallib: URL? {
+        get {
+            var s = mlx_string_new()
+            defer { mlx_string_free(s) }
+
+            mlx_metal_get_metallib_path(&s)
+
+            if let path = String(cString: mlx_string_data(s), encoding: .utf8), !path.isEmpty {
+                return URL(fileURLWithPath: path)
+            } else {
+                return nil
+            }
+        }
+        set {
+            let path = newValue?.path(percentEncoded: false) ?? ""
+            mlx_metal_set_metallib_path(path.cString(using: .utf8))
+        }
+    }
+
     /// Return a snapshot of memory stats -- see ``Memory/Snapshot`` for more details.
     ///
     /// Get the current memory use.  This can be used to measure before/after and current memory use:
@@ -221,13 +242,29 @@ public enum GPU {
     }
 
     /// Get information about the GPU device and system settings
+    ///
+    /// The value is computed once per process.
     public static func deviceInfo() -> DeviceInfo {
+        cachedDeviceInfo
+    }
+
+    private static let cachedDeviceInfo: DeviceInfo = {
         var mib = [CTL_HW, HW_MEMSIZE]
         var memSize: size_t = 0
         var length: size_t = MemoryLayout.size(ofValue: memSize)
         sysctl(&mib, 2, &memSize, &length, nil, 0)
 
-        if let device = MTLCreateSystemDefaultDevice() {
+        // Select the device the same way as MLX (metal::load_device): the first
+        // device of MTLCopyAllDevices(), else the system default device. In a
+        // command-line process MTLCreateSystemDefaultDevice() opens a window
+        // server session, which can stall for several seconds.
+        #if os(macOS)
+            let device = MTLCopyAllDevices().first ?? MTLCreateSystemDefaultDevice()
+        #else
+            let device = MTLCreateSystemDefaultDevice()
+        #endif
+
+        if let device {
             let architecture: String
             if #available(macOS 14.0, iOS 17.0, tvOS 17.0, *) {
                 architecture = device.architecture.name
@@ -244,5 +281,5 @@ public enum GPU {
                 architecture: "Unknown", maxBufferSize: 0, maxRecommendedWorkingSetSize: 0,
                 memorySize: memSize)
         }
-    }
+    }()
 }

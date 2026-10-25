@@ -240,6 +240,149 @@ let c2b = c2(bias)
 XCTAssertFalse(allClose(c2a, c2b).item())
 ```
 
+The same rule applies to a `Module` that is captured (closed over) rather than
+passed as an explicit function argument. `Module` conforms to ``Updatable``, so
+its parameters count as implicit state, just like `MLXRandom.globalState` above.
+If you compile a function that reads a module's parameters without listing that
+module in `inputs:`/`outputs:`, the values are baked into the compiled graph the
+first time it traces and later updates to the module (for example swapping in
+new LoRA weights with `Module.update(parameters:)`) will be silently ignored:
+
+```swift
+class ScaleModule: Module, UnaryLayer {
+    var scale: MLXArray
+
+    init(_ value: Float) {
+        self.scale = MLXArray(value)
+    }
+
+    func callAsFunction(_ x: MLXArray) -> MLXArray {
+        x * scale
+    }
+}
+
+let model = ScaleModule(2.0)
+
+// `inputs: []` -- the module's parameters are captured as constants
+let compiled = compile(inputs: []) { (x: MLXArray) -> MLXArray in
+    model(x)
+}
+
+print(compiled(MLXArray(Float(3))))  // 6
+
+// simulate a LoRA-style in place update of the module's weights
+model.update(parameters: .unflattened([("scale", MLXArray(Float(10)))]))
+eval(model)
+
+// still 6 -- the compiled function never sees the update!
+print(compiled(MLXArray(Float(3))))
+```
+
+Note that this pitfall is hard to hit by accident: a plain `compile { ... }`
+closure must be `@Sendable` (see <doc:#Sendable> below), and capturing a
+`Module` (which is not `Sendable`) is a compile error. Writing
+`compile(inputs: []) { ... }` is the explicit way to say "capture this state
+and freeze it at trace time".
+
+To make the compiled function observe the update, pass the module via `inputs:`:
+
+```swift
+let compiled = compile(inputs: [model]) { (x: MLXArray) -> MLXArray in
+    model(x)
+}
+
+print(compiled(MLXArray(Float(3))))  // 6
+
+model.update(parameters: .unflattened([("scale", MLXArray(Float(10)))]))
+eval(model)
+
+print(compiled(MLXArray(Float(3))))  // 30 -- now it sees the update
+```
+
+`inputs:` is what makes the compiled function observe external updates: on every
+call the *current* values of the listed state are fed back into the compiled
+graph. `outputs:` is the reverse direction -- it writes values back out of the
+graph into the real arrays, and is only needed when the compiled closure itself
+*mutates* the captured state (for example a training step that calls
+`optimizer.update(model:gradients:)` inside the compiled function, as shown
+below). Since `model(x)` above only reads `scale`, `inputs: [model]` alone is
+enough; adding `outputs: [model]` would be harmless but unnecessary.
+
+## Sendable
+
+There are two families of `compile` functions, and which one is used determines
+whether the result is `@Sendable`:
+
+- ``compile(shapeless:_:)-(Bool,([MLXArray])->[MLXArray])`` (and variants) takes
+  a `@Sendable` function and returns a `@Sendable` function. A closure that
+  captures nothing -- it only uses its arguments -- is `@Sendable`, so this is
+  what you get for the common case of compiling a pure function:
+
+    ```swift
+    // usable as a global or across concurrency domains
+    let compiledGelu: @Sendable (MLXArray) -> MLXArray = compile(shapeless: true) { x in
+        x * (1 + erf(x / sqrt(2))) / 2
+    }
+    ```
+
+- ``compile(inputs:outputs:shapeless:_:)-([Updatable],[Updatable],Bool,([MLXArray])->[MLXArray])``
+  (and variants) takes any function, including one that captures non-`Sendable`
+  state such as an ``MLXArray`` or `Module`, and returns a function that is
+  **not** `@Sendable`. It is selected whenever you pass `inputs:` or `outputs:`,
+  or when the function you pass is not `@Sendable`.
+
+If a `compile { ... }` closure fails to build with an error like
+"capture of 'model' with non-Sendable type ... in a '@Sendable' closure", the
+closure is capturing state. Either:
+
+- list the captured state in `inputs:` (and `outputs:` if the closure mutates
+  it) so the compiled function sees updates, or
+- write `compile(inputs: []) { ... }` to deliberately capture the values as
+  constants at trace time (see the `Module` example above). This is also the
+  spelling to use for captured values that are not ``Updatable`` at all.
+
+This split matches how the result is used: a compiled function that captures
+mutable, non-`Sendable` state cannot safely be shared between threads, while a
+compiled pure function can.
+
+### Materialized state
+
+``MaterializedArray`` and `MaterializedModule` (from `MLXNN`) are `Sendable`, so
+a `@Sendable` closure may capture them and still use the `@Sendable` family:
+
+```swift
+let model = MaterializedModule(Linear(16, 16))
+
+// @Sendable -- the model's parameters are captured as constants
+let compiled: @Sendable (MLXArray) -> MLXArray = compile { x in
+    model(x)
+}
+```
+
+Captured values are frozen at trace time, which is exactly right here: the
+contents of a ``MaterializedArray`` (and the parameters of a `MaterializedModule`)
+are sealed and can never change, so there is nothing to observe and no need for
+`inputs:`.
+
+What *can* change is which value the closure reaches.  If it captures a
+mutable container -- for example a `Mutex<MaterializedModule>` or a class that
+holds the current model -- and that container is later pointed at a different
+model, the compiled function keeps using the one it was traced with.  Compile a
+new function when the model is replaced.
+
+Sealed state reached through `inputs:` is also treated as a constant rather
+than being fed in on every call, but there the compiled function checks the
+identity of the sealed arrays on each call and retraces if they have been
+replaced.
+
+> Note: in the Swift 5 language mode with minimal concurrency checking the
+compiler does not diagnose non-`Sendable` captures, so a capturing closure
+literal may still resolve to the `@Sendable` variant. Use the Swift 6 language
+mode (or `-strict-concurrency=complete`) to get these checks.
+
+See also ``vmapSendable(_:inAxes:outAxes:)-3tm2r`` for the equivalent in
+<doc:vmap>.
+
 ## Compiling Training Graphs 
 
 This section will step through how to use ``compile(inputs:outputs:shapeless:_:)-([Updatable],[Updatable],Bool,([MLXArray])->[MLXArray])`` 
@@ -322,4 +465,7 @@ for _ in 0 ..< 30 {
 - ``compile(inputs:outputs:shapeless:_:)-([Updatable],[Updatable],Bool,([MLXArray])->[MLXArray])``
 - ``compile(inputs:outputs:shapeless:_:)-([Updatable],[Updatable],Bool,(MLXArray)->MLXArray)``
 - ``compile(inputs:outputs:shapeless:_:)-([Updatable],[Updatable],Bool,(MLXArray,MLXArray)->MLXArray)``
+- ``compile(shapeless:_:)-(Bool,([MLXArray])->[MLXArray])``
+- ``compile(shapeless:_:)-(Bool,(MLXArray)->MLXArray)``
+- ``compile(shapeless:_:)-(Bool,(MLXArray,MLXArray)->MLXArray)``
 - ``compile(enable:)``

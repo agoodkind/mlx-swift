@@ -113,9 +113,7 @@ BibTex entry:
 ```text
 @software{mlx2023,
   author = {Awni Hannun and Jagrit Digani and Angelos Katharopoulos and Ronan Collobert},
-{% raw %}
   title = {{MLX}: Efficient and flexible machine learning on Apple silicon},
-{% endraw %}
   url = {https://github.com/ml-explore},
   version = {0.0},
   year = {2023},

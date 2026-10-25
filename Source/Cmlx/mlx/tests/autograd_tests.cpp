@@ -17,6 +17,24 @@
 
 using namespace mlx::core;
 
+namespace {
+
+int count_graph_nodes(const array& x, const std::string& node_name) {
+  std::ostringstream oss;
+  print_graph(oss, x);
+  auto graph = oss.str();
+
+  int count = 0;
+  size_t pos = 0;
+  while ((pos = graph.find(node_name, pos)) != std::string::npos) {
+    count++;
+    pos += node_name.size();
+  }
+  return count;
+}
+
+} // namespace
+
 TEST_CASE("test stop gradient") {
   auto x = zeros({5, 5});
   auto y = stop_gradient(x);
@@ -325,6 +343,42 @@ TEST_CASE("test grad") {
     CHECK_THROWS_AS(grad(fn, {0, 1, 2})({x, y}), std::invalid_argument);
     CHECK_THROWS_AS(grad(fn, {0, 0})({x, y}), std::invalid_argument);
     CHECK_THROWS_AS(grad(fn, -3)({x, y}), std::invalid_argument);
+  }
+}
+
+TEST_CASE("test transform container reuse does not accumulate stale wrappers") {
+  auto x = ones({128});
+
+  SUBCASE("grad reuses a single copy wrapper") {
+    std::vector<array> container = {array(1.0f)};
+    auto grad_fn = grad([&container](const std::vector<array>& inputs) {
+      container[0] = inputs[0];
+      return sum(inputs[1]);
+    });
+
+    for (int i = 0; i < 5; ++i) {
+      auto grads = grad_fn({container[0], x});
+      eval(grads);
+    }
+
+    CHECK_EQ(count_graph_nodes(container[0], "Copy "), 1);
+  }
+
+  SUBCASE("jvp reuses a single copy wrapper") {
+    std::vector<array> container = {array(1.0f)};
+    auto fun = [&container](const std::vector<array>& inputs) {
+      container[0] = inputs[0];
+      return std::vector<array>{sum(inputs[1])};
+    };
+
+    for (int i = 0; i < 5; ++i) {
+      auto [outputs, tangents] =
+          jvp(fun, {container[0], x}, {array(1.0f), ones({128})});
+      eval(outputs);
+      eval(tangents);
+    }
+
+    CHECK_EQ(count_graph_nodes(container[0], "Copy "), 1);
   }
 }
 
@@ -795,6 +849,30 @@ TEST_CASE("test slice grads") {
   CHECK_EQ(out.size(), 0);
 }
 
+TEST_CASE("test slice update jvp with one tangent") {
+  auto src = array({1.0f, 2.0f, 3.0f, 4.0f});
+  auto update = array({5.0f, 6.0f});
+  auto src_tan = array({1.0f, 2.0f, 3.0f, 4.0f});
+  auto update_tan = array({7.0f, 8.0f});
+
+  for (bool add : {false, true}) {
+    auto update_fn = [&src, add](array x) {
+      return add ? slice_update_add(src, x, Shape{1}, Shape{3})
+                 : slice_update(src, x, Shape{1}, Shape{3});
+    };
+    auto out = jvp(update_fn, update, update_tan).second;
+    CHECK(array_equal(out, array({0.0f, 7.0f, 8.0f, 0.0f})).item<bool>());
+
+    auto src_fn = [&update, add](array x) {
+      return add ? slice_update_add(x, update, Shape{1}, Shape{3})
+                 : slice_update(x, update, Shape{1}, Shape{3});
+    };
+    out = jvp(src_fn, src, src_tan).second;
+    auto expected = add ? src_tan : array({1.0f, 0.0f, 0.0f, 4.0f});
+    CHECK(array_equal(out, expected).item<bool>());
+  }
+}
+
 TEST_CASE("test min and max vjp") {
   // Test min
   {
@@ -1262,6 +1340,68 @@ TEST_CASE("test scan grads") {
     CHECK(array_equal(out, expected).item<bool>());
   }
 
+  // Test cummax
+  {
+    int axis = 0;
+    int reverse = false;
+    int inclusive = true;
+    auto fun = [&axis, &reverse, &inclusive](array x) {
+      return cummax(x, axis, reverse, inclusive);
+    };
+
+    auto x = array({3.0f, 3.0f, 1.0f, 5.0f, 5.0f}, {5});
+    auto g = ones({5});
+    auto out = vjp(fun, x, g).second;
+    auto expected = array({1.0f, 2.0f, 0.0f, 1.0f, 1.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    reverse = true;
+    out = vjp(fun, x, g).second;
+    expected = array({0.0f, 0.0f, 0.0f, 4.0f, 1.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    inclusive = false;
+    out = vjp(fun, x, g).second;
+    expected = array({0.0f, 0.0f, 0.0f, 3.0f, 1.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    reverse = false;
+    out = vjp(fun, x, g).second;
+    expected = array({1.0f, 2.0f, 0.0f, 1.0f, 0.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+  }
+
+  // Test cummin
+  {
+    int axis = 0;
+    int reverse = false;
+    int inclusive = true;
+    auto fun = [&axis, &reverse, &inclusive](array x) {
+      return cummin(x, axis, reverse, inclusive);
+    };
+
+    auto x = array({3.0f, 3.0f, 1.0f, 5.0f, 5.0f}, {5});
+    auto g = ones({5});
+    auto out = vjp(fun, x, g).second;
+    auto expected = array({1.0f, 1.0f, 3.0f, 0.0f, 0.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    reverse = true;
+    out = vjp(fun, x, g).second;
+    expected = array({0.0f, 0.0f, 3.0f, 1.0f, 1.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    inclusive = false;
+    out = vjp(fun, x, g).second;
+    expected = array({0.0f, 0.0f, 2.0f, 1.0f, 1.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+
+    reverse = false;
+    out = vjp(fun, x, g).second;
+    expected = array({1.0f, 1.0f, 2.0f, 0.0f, 0.0f}, {5});
+    CHECK(array_equal(out, expected).item<bool>());
+  }
+
   // Test cumsum jvp
   {
     int axis = 0;
@@ -1357,11 +1497,6 @@ TEST_CASE("test grad dynamic slices") {
 }
 
 TEST_CASE("test masked_scatter autograd") {
-  if (cu::is_available()) {
-    INFO("Skipping masked_scatter cuda autograd tests");
-    return;
-  }
-
   // Test jvp
   {
     auto self = array({10.f, 20.f, 30.f, 40.f}, {4});

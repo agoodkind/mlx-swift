@@ -26,6 +26,12 @@ jobs:
         shell: bash
         run: xcodebuild -showComponent MetalToolchain
 
+      - name: Setup gh
+        if: github.event.release.tag_name || inputs.tag
+        shell: sh
+        run: |
+          brew install gh
+
       - name: Build XCFrameworks
         shell: bash
         env:
@@ -42,6 +48,15 @@ jobs:
           for framework in MLX Cmlx MLXNN MLXOptimizers; do
             zip -r -y "${framework}.xcframework.zip" "${framework}.xcframework"
           done
+
+      - name: Upload XCFrameworks as workflow artifacts
+        if: ${{ !(github.event.release.tag_name || inputs.tag) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcframeworks
+          if-no-files-found: error
+          retention-days: 7
+          path: xcode/build/output/*.xcframework.zip
 
       - name: Upload XCFrameworks to release
         if: github.event.release.tag_name || inputs.tag

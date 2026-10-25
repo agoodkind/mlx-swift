@@ -28,6 +28,12 @@ extern "C" {
  */
 /**@{*/
 
+int mlx_fast_cross_entropy(
+    mlx_array* res,
+    const mlx_array logits,
+    const mlx_array targets,
+    const mlx_stream s);
+
 typedef struct mlx_fast_cuda_kernel_config_ {
   void* ctx;
 } mlx_fast_cuda_kernel_config;
@@ -195,7 +201,10 @@ int mlx_fast_scaled_dot_product_attention(
     const char* mask_mode,
     const mlx_array mask_arr /* may be null */,
     const mlx_array sinks /* may be null */,
+    bool force_fused,
     const mlx_stream s);
+
+/**@}*/
 
 int mlx_fast_streamed_gather_mm(
     mlx_array* res,
@@ -228,6 +237,22 @@ int mlx_fast_turbo_decode_v(
 
 int mlx_fast_prefault(mlx_array x);
 
+
+// mlx_fast_submit_prefetch (PAPPS Background Worker)
+// Instantly queues an asynchronous NVMe read into a background Thread Pool.
+int mlx_fast_submit_prefetch(
+    const char* safetensors_path,
+    const char* tensor_name,
+    uint32_t expert_index);
+
+void mlx_fast_set_prefetch_enabled(bool enabled);
+
+// pread() directly into the already-evaluated MLX array's unified memory buffer.
+// This gives full NVMe sequential throughput without OS page-fault overhead.
+// The array MUST already be evaluated (concrete pointer exists).
+// safetensors_path: full path to .safetensors file
+// tensor_name: e.g. "model.layers.0.mlp.experts.gate_proj.weight"
+// expert_index: 0-based index of the expert to read
 int mlx_fast_pread_into(
     mlx_array dst,
     const char* safetensors_path,
@@ -246,19 +271,9 @@ int mlx_fast_pread_into_offset(
     uint32_t expert_index,
     size_t dst_offset);
 
-// mlx_fast_submit_prefetch (PAPPS Background Worker)
-int mlx_fast_submit_prefetch(
-    const char* safetensors_path,
-    const char* tensor_name,
-    uint32_t expert_index);
-
-void mlx_fast_set_prefetch_enabled(bool enabled);
-
-/**@}*/
-
 // ── SSD Flash-Stream metrics snapshot ────────────────────────────────────────
 // Cumulative NVMe throughput stats since process start.
-// Call mlx_ssd_metrics_snapshot() from any thread; never resets any counter.
+// Call mlx_ssd_metrics_snapshot() from any thread to read without resetting counters.
 
 typedef struct MlxSSDMetricsSnapshot {
     double   throughput_mb_per_s;  /* 10-s rolling window average (0 before first window) */
@@ -268,10 +283,6 @@ typedef struct MlxSSDMetricsSnapshot {
 } MlxSSDMetricsSnapshot;
 
 void mlx_ssd_metrics_snapshot(MlxSSDMetricsSnapshot* out);
-
-// TurboKV telemetry — call from Swift on each compression event to accumulate
-// stats that appear in the 10-second SSD stream log.
-void mlx_turbo_kv_record(uint64_t tokens, uint64_t orig_bytes, uint64_t packed_bytes);
 
 #ifdef __cplusplus
 }

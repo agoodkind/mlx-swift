@@ -1,8 +1,10 @@
 // Copyright © 2023-2025 Apple Inc.
 
+#include <optional>
 #include <sstream>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/variant.h>
@@ -59,11 +61,13 @@ void init_device(nb::module_& m) {
       "set_default_device",
       &mx::set_default_device,
       "device"_a,
+      nb::sig("def set_default_device(device: Device | DeviceType) -> None"),
       R"pbdoc(Set the default device.)pbdoc");
   m.def(
       "is_available",
       &mx::is_available,
       "device"_a,
+      nb::sig("def is_available(device: Device | DeviceType) -> bool"),
       R"pbdoc(Check if a back-end is available for the given device.)pbdoc");
   m.def(
       "device_count",
@@ -80,8 +84,12 @@ void init_device(nb::module_& m) {
       )pbdoc");
   m.def(
       "device_info",
-      &mx::device_info,
-      nb::arg("d") = mx::default_device(),
+      [](std::optional<mx::Device> d) {
+        return mx::device_info(d.value_or(mx::default_device()));
+      },
+      "d"_a = nb::none(),
+      nb::sig(
+          "def device_info(d: None | Device | DeviceType = None) -> dict[str, str | int]"),
       R"pbdoc(
       Get information about a device.
 

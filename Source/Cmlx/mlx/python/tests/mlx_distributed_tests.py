@@ -1,10 +1,12 @@
 # Copyright © 2025 Apple Inc.
 
+import math
+
 import mlx.core as mx
 import mlx.nn as nn
 import mlx_tests
 from mlx.nn.layers.distributed import shard_inplace, shard_linear
-from mlx.nn.utils import average_gradients
+from mlx.nn.utils import average_gradients, clip_grad_norm_sharded
 
 
 class MLXDistributedCommonTestCase(mlx_tests.MLXTestCase):
@@ -46,17 +48,6 @@ class MLXDistributedCommonTestCase(mlx_tests.MLXTestCase):
             self.assertEqual(len(new_grads), 10)
             self.assertTrue(all(mx.all(g == 1) for g in new_grads))
             self.assertEqual(n_calls, 10)
-
-            n_calls = 0
-            xtype = mx.float16
-            new_grads = average_gradients(
-                grads, all_reduce_size=2 * 50, communication_type=mx.float16
-            )
-            mx.eval(new_grads)
-            self.assertEqual(len(new_grads), 10)
-            self.assertTrue(all(g.dtype == mx.float32 for g in new_grads))
-            self.assertTrue(all(mx.all(g == 1) for g in new_grads))
-            self.assertEqual(n_calls, 2)
 
         finally:
             mx.distributed.all_sum = original_all_sum
@@ -146,7 +137,7 @@ class MLXDistributedCommonTestCase(mlx_tests.MLXTestCase):
         self.assertTrue(mx.allclose(y, y2, atol=self.atol, rtol=self.rtol))
         self.assertTrue(mx.allclose(y[part], y1, atol=self.atol, rtol=self.rtol))
 
-        # And their quant versions (QuintizedMatmul is not supported on CUDA)
+        # And their quant versions (QuantizedMatmul is not supported on CUDA)
         if not mx.cuda.is_available():
             qlin = lin.to_quantized()
             slin1 = shard_linear(qlin, "all-to-sharded")
@@ -154,6 +145,27 @@ class MLXDistributedCommonTestCase(mlx_tests.MLXTestCase):
             y = qlin(x)
             y1 = slin1(x)
             y2 = slin2(x[part])
+            self.assertTrue(mx.allclose(y, y2, atol=self.atol, rtol=self.rtol))
+            self.assertTrue(mx.allclose(y[part], y1))
+
+            # Test non-affine quantization modes (mxfp8)
+            qlin_mxfp8 = lin.to_quantized(group_size=32, bits=8, mode="mxfp8")
+            self.assertEqual(qlin_mxfp8.mode, "mxfp8")
+
+            slin1_mxfp8 = shard_linear(qlin_mxfp8, "all-to-sharded")
+            slin2_mxfp8 = shard_linear(qlin_mxfp8, "sharded-to-all")
+
+            # Verify mode is propagated
+            self.assertEqual(slin1_mxfp8.mode, "mxfp8")
+            self.assertEqual(slin2_mxfp8.mode, "mxfp8")
+
+            # Verify biases parameter is not set for mxfp8
+            self.assertIsNone(slin1_mxfp8.get("biases"))
+            self.assertIsNone(slin2_mxfp8.get("biases"))
+
+            y = qlin_mxfp8(x)
+            y1 = slin1_mxfp8(x)
+            y2 = slin2_mxfp8(x[part])
             self.assertTrue(mx.allclose(y, y2, atol=self.atol, rtol=self.rtol))
             self.assertTrue(mx.allclose(y[part], y1))
 
@@ -312,3 +324,51 @@ class MLXDistributedCommonTestCase(mlx_tests.MLXTestCase):
             y = mx.distributed.all_gather(x)
             self.assertEqual(y.shape, (world.size() * 2, 2, 4))
             self.assertTrue(mx.all(y == 1))
+
+    def test_clip_grad_norm_sharded(self):
+        world = mx.distributed.init()
+        N = world.size()
+
+        value = 3.0
+        grads_slice = {"a": mx.ones((4, 3)) * value, "b": mx.ones((5,)) * value}
+        local_numel = 4 * 3 + 5
+        expected_norm = math.sqrt(N * local_numel) * value
+
+        clipped, grad_norm = clip_grad_norm_sharded(
+            grads_slice, max_norm=1e9, group=world
+        )
+        mx.eval(clipped, grad_norm)
+        self.assertTrue(
+            mx.allclose(
+                grad_norm, mx.array(expected_norm), atol=self.atol, rtol=self.rtol
+            )
+        )
+        for k in grads_slice:
+            self.assertTrue(
+                mx.allclose(clipped[k], grads_slice[k], atol=self.atol, rtol=self.rtol)
+            )
+
+        max_norm = 1.0
+        clipped, grad_norm = clip_grad_norm_sharded(
+            grads_slice, max_norm=max_norm, group=world
+        )
+        mx.eval(clipped, grad_norm)
+        scale = max_norm / (expected_norm + 1e-6)
+        for k in grads_slice:
+            self.assertTrue(
+                mx.allclose(
+                    clipped[k], grads_slice[k] * scale, atol=self.atol, rtol=self.rtol
+                )
+            )
+
+    def test_jaccl_all_gather_factory_validation(self):
+        # A custom side-channel factory is only valid with the jaccl backend.
+        with self.assertRaises(ValueError):
+            mx.distributed.init(
+                backend="ring",
+                all_gather_factory=lambda rank, size: lambda src, n_bytes: b"",
+            )
+
+        # The factory must be callable.
+        with self.assertRaises(TypeError):
+            mx.distributed.init(backend="jaccl", all_gather_factory="not_callable")
