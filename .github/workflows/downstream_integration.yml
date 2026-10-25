@@ -26,14 +26,14 @@ concurrency:
 jobs:
   lmd_consumer:
     name: LMD consumer
-    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@0dc55291f9a84819a30863fc83883c4610261e00
+    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@1e784bfecdc54d99403c2e1e5eae739ce7d13407
     with:
-      lmd_ref: 0dc55291f9a84819a30863fc83883c4610261e00
+      lmd_ref: 1e784bfecdc54d99403c2e1e5eae739ce7d13407
       core_ref: ${{ github.event.pull_request.head.sha || github.sha }}
       library_ref: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
       swiftlm_ref: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
       library_profile: ${{ (inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352') == '60054f77f91bc3e77c44950054dd6a9b53359352' && 'library-runtime-60054f7' || '' }}
-      swiftlm_profile: ${{ (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == 'dbf4eee36701d844996038b182a272f40a41f414' && 'swiftlm-http-diagnostics-dbf4eee' || '' }}
+      swiftlm_profile: ${{ (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' && 'swiftlm-runtime-4cc594d' || (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == 'dbf4eee36701d844996038b182a272f40a41f414' && 'swiftlm-http-diagnostics-dbf4eee' || '' }}
     secrets:
       LOCAL_POOL_CAPACITY_TOKEN: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
 
@@ -117,9 +117,9 @@ jobs:
 
       - name: Set up Swift result verification
         id: maintenance
-        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@426e79c9358c0d0d16f2b786acba7a93ffc9fc9c
         with:
-          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
+          ref: '426e79c9358c0d0d16f2b786acba7a93ffc9fc9c'
 
       - name: Build SwiftLM and tests in Debug
         working-directory: SwiftLM
