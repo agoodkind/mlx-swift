@@ -34,6 +34,18 @@ jobs:
       MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
       SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests|OwnFeatureHTTPTests)'
     steps:
+      - name: Align Xcode and the runtime CPU compiler
+        run: |
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(env -u DEVELOPER_DIR xcode-select --print-path)" = "$DEVELOPER_DIR"
+          xcrun --kill-cache
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --find clang++
+          g++ --version
+
       - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
         with:
