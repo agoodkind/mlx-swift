@@ -5,7 +5,7 @@ import Foundation
 
 /// A weak handle to MLX's thread-local cache. Retaining this wrapper does not keep
 /// the backend cache alive after its thread exits.
-private final class ThreadCompilationCache {
+private final class ThreadCompilationCache: @unchecked Sendable {
     private let ctx: mlx_compile_cache
 
     private init() {
@@ -34,13 +34,45 @@ private final class ThreadCompilationCache {
     }
 }
 
+private enum CompilationCacheCleanup {
+    private static let queue = DispatchQueue(label: "MLX.CompilationCacheCleanup")
+    private static let identifierLock = NSLock()
+    nonisolated(unsafe) private static var lastIdentifier: UInt = 0
+
+    static func allocateIdentifier() -> UInt {
+        identifierLock.withLock {
+            precondition(lastIdentifier < UInt.max, "Compiled function identifiers exhausted.")
+            lastIdentifier += 1
+            return lastIdentifier
+        }
+    }
+
+    static func erase(_ identifier: UInt, from caches: [ThreadCompilationCache]) {
+        guard !caches.isEmpty else { return }
+        queue.async {
+            withEvalLock {
+                #if DEBUG
+                    EvalLockOwnership.requireHeldByCurrentThread(
+                        "CompilationCacheCleanup must erase caches under evalLock.")
+                #endif
+                for cache in caches {
+                    cache.erase(identifier)
+                }
+                #if DEBUG
+                    EvalLockOwnership.recordCompileErase()
+                #endif
+            }
+        }
+    }
+}
+
 // Mutable cache bookkeeping is guarded by evalLock. The stateful overloads also
 // hold the instance lock while replacing observed inputs and outputs.
 // Only the overloads accepting Sendable captures return a Sendable closure.
 final class CompiledFunction: @unchecked (Sendable) {
 
-    /// unique (for the lifetime of the object) identifier for the compiled function
-    private var id: UInt!
+    /// Identifiers never repeat, including while cache cleanup waits for evalLock.
+    private let id = CompilationCacheCleanup.allocateIdentifier()
 
     /// Every backend cache this function has used, guarded by evalLock.
     private var caches: [ObjectIdentifier: ThreadCompilationCache] = [:]
@@ -92,7 +124,6 @@ final class CompiledFunction: @unchecked (Sendable) {
         self.inputs = inputs
         self.outputs = outputs
         self.shapeless = shapeless
-        self.id = UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())
     }
 
     init(
@@ -103,20 +134,12 @@ final class CompiledFunction: @unchecked (Sendable) {
         self.inputs = []
         self.outputs = []
         self.shapeless = shapeless
-        self.id = UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())
     }
 
-    // Erase every calling thread's cache before this address can be reused as an ID.
+    // A caller may destroy this function while owning a lock requested by a trace.
+    // Defer cache erasure to avoid waiting for evalLock on the caller's thread.
     deinit {
-        withEvalLock {
-            #if DEBUG
-                EvalLockOwnership.requireHeldByCurrentThread(
-                    "the compiler cache was erased without holding evalLock; "
-                        + "see CompiledFunction.deinit")
-                EvalLockOwnership.recordCompileErase()
-            #endif
-            eraseCaches()
-        }
+        CompilationCacheCleanup.erase(id, from: Array(caches.values))
     }
 
     /// Must be called under evalLock, including when sealed state is rebound.
