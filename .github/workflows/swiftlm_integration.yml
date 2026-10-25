@@ -10,7 +10,7 @@ on:
         description: Exact SwiftLM commit to validate
         type: string
         required: true
-        default: d2f09fb66097739de05c63397e18bd259edeadd0
+        default: dbf4eee36701d844996038b182a272f40a41f414
       mlx_swift_lm_ref:
         description: Exact mlx-swift-lm commit to validate
         type: string
@@ -43,7 +43,8 @@ jobs:
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      SWIFTLM_REF: ${{ inputs.swiftlm_ref || 'd2f09fb66097739de05c63397e18bd259edeadd0' }}
+      CORE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || 'dbf4eee36701d844996038b182a272f40a41f414' }}
       MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
       SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests|OwnFeatureHTTPTests)'
     steps:
@@ -62,6 +63,7 @@ jobs:
       - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
         with:
+          ref: ${{ env.CORE_REF }}
           path: mlx-swift
           submodules: recursive
           persist-credentials: false
