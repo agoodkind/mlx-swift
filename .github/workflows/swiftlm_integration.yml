@@ -126,9 +126,17 @@ jobs:
           echo "SWIFTLM_BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
 
       - name: Run tests without pretrained models
+        id: model_free_tests
         working-directory: SwiftLM
         run: |
-          swift test --build-system native --jobs 4 -c release -Xswiftc -enable-testing list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
+          if swift test --build-system native --jobs 4 -c release -Xswiftc -enable-testing list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"; then
+            echo "SwiftLM test discovery completed."
+          else
+            discovery_status=$?
+            cat "$RUNNER_TEMP/swiftlm-tests.txt"
+            echo "::error::SwiftLM test discovery failed with exit code $discovery_status."
+            exit "$discovery_status"
+          fi
           for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests; do
             if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
               echo "::error::The selected SwiftLM commit does not provide $test_class."
@@ -136,6 +144,14 @@ jobs:
             fi
           done
           swift test --build-system native --jobs 4 -c release -Xswiftc -enable-testing --skip-build --filter "$SWIFTLM_TEST_FILTER"
+
+      - name: Upload SwiftLM test discovery output on failure
+        if: failure() && steps.model_free_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftlm-test-discovery
+          path: ${{ runner.temp }}/swiftlm-tests.txt
+          if-no-files-found: error
 
       - name: Run optional pretrained speculative decoding evaluation
         if: github.event_name == 'workflow_dispatch' && inputs.run_speculative_eval
