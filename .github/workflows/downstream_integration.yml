@@ -26,9 +26,9 @@ concurrency:
 jobs:
   lmd_consumer:
     name: LMD consumer
-    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@6a1892b4a386f3c323a560abf1b464e75ab3f317
+    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@0dc55291f9a84819a30863fc83883c4610261e00
     with:
-      lmd_ref: 6a1892b4a386f3c323a560abf1b464e75ab3f317
+      lmd_ref: 0dc55291f9a84819a30863fc83883c4610261e00
       core_ref: ${{ github.event.pull_request.head.sha || github.sha }}
       library_ref: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
       swiftlm_ref: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
