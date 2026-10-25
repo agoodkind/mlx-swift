@@ -8,6 +8,35 @@ permissions:
   contents: read
 
 jobs:
+  encuda_process_tests:
+    name: Encuda Process Tests (Linux)
+    if: github.repository == 'agoodkind/mlx-swift'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: swift:6.2-rhel-ubi9
+    steps:
+      - name: Checkout core candidate
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node for manifest fixtures
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Build portable subprocess tests
+        run: |
+          swiftc -swift-version 6 Source/Encuda/encuda-utils.swift \
+            Tests/EncudaProcessTests/ProcessTests.swift -o "$RUNNER_TEMP/encuda-process-tests"
+
+      - name: Verify subprocess exit and ownership behavior
+        run: '"$RUNNER_TEMP/encuda-process-tests"'
+
+      - name: Verify Linux CUDA plugin identity fixtures
+        run: node --test .github/scripts/verify-spm-manifest.test.mjs
+
   fork_regression_tests:
     name: Fork Regression Tests
     if: github.repository == 'agoodkind/mlx-swift'
@@ -28,6 +57,17 @@ jobs:
           swift --version
           xcodebuild -downloadComponent MetalToolchain
 
+      - name: Verify subprocess exit and ownership behavior
+        run: |
+          swiftc -swift-version 6 Source/Encuda/encuda-utils.swift \
+            Tests/EncudaProcessTests/ProcessTests.swift -o "$RUNNER_TEMP/encuda-process-tests"
+          "$RUNNER_TEMP/encuda-process-tests"
+
+      - name: Verify CUDA manifest containment
+        run: |
+          python3 scripts/verify-spm-manifest.py
+          node --test .github/scripts/verify-spm-manifest.test.mjs
+
       - name: Run focused core regressions
         run: |
           xcodebuild test \
@@ -45,6 +85,18 @@ jobs:
             -only-testing:MLXTests/StreamTests/testGPUArrayEvaluatesOnAnotherThread \
             -only-testing:MLXTests/LoggingTests \
             -only-testing:MLXTests/CompileLockOrderingTests
+
+      - name: Build compile-lock stress diagnostic
+        run: |
+          xcodebuild build -scheme CompileLockRepro -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/mlx-core-derived" \
+            -skipPackagePluginValidation -jobs 4
+
+      - name: Verify compile-lock diagnostic exit behavior
+        env:
+          COMPILE_LOCK_REPRO_BINARY: ${{ runner.temp }}/mlx-core-derived/Build/Products/Debug/CompileLockRepro
+        run: node --test .github/scripts/compile-lock-repro.test.mjs
 
       - name: Upload core regression results
         if: always()
