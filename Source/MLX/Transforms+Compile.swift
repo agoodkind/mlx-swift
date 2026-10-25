@@ -172,8 +172,8 @@ final class CompiledFunction: @unchecked (Sendable) {
     ///     thread W:  L_cf(shared) -> wants evalLock
     ///
     /// Acquiring `evalLock` here gives the process a single global order, which
-    /// makes the inversion impossible.  `Source/CompileLockRepro` reproduces the
-    /// deadlock deterministically without this.
+    /// makes the inversion impossible. `CompileLockOrderingTests` checks the
+    /// acquisition order with debug instrumentation.
     ///
     /// The cost is small: ``innerCall(_:)`` used to take `evalLock` itself and
     /// hold it through `mlx_closure_apply` -- i.e. across the actual evaluation
