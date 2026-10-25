@@ -12,6 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  select_macos_runner:
+    name: Select macOS runner
+    if: github.repository == 'agoodkind/mlx-swift'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      label: ${{ steps.runner.outputs.label }}
+    steps:
+      - name: Use the shared macOS runner selector
+        id: runner
+        uses: agoodkind/swift-makefile/.github/actions/plan-runner@main
+        with:
+          runner: macos-26
+          capacity-token: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
+
   encuda_process_tests:
     name: Encuda Process Tests (Linux)
     if: github.repository == 'agoodkind/mlx-swift'
@@ -37,9 +52,9 @@ jobs:
 
       - name: Set up Swift maintenance verification
         id: maintenance
-        uses: agoodkind/lmd/.github/actions/setup-maintenance@426e79c9358c0d0d16f2b786acba7a93ffc9fc9c
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@763487338b00335c1dc9fb65d974d8d547519f85
         with:
-          ref: '426e79c9358c0d0d16f2b786acba7a93ffc9fc9c'
+          ref: '763487338b00335c1dc9fb65d974d8d547519f85'
           test-filter: LMDMaintenanceTests
 
       - name: Build portable subprocess tests
@@ -55,8 +70,9 @@ jobs:
 
   fork_regression_tests:
     name: Fork Regression Tests
-    if: github.repository == 'agoodkind/mlx-swift'
-    runs-on: macos-26
+    if: ${{ always() && (github.repository == 'agoodkind/mlx-swift') }}
+    needs: select_macos_runner
+    runs-on: ${{ needs.select_macos_runner.outputs.label || 'ubuntu-latest' }}
     timeout-minutes: 40
     defaults:
       run:
@@ -64,6 +80,18 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
+      - name: Require successful macOS prerequisites
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          SELECTOR_RESULT: ${{ needs.select_macos_runner.result }}
+          SELECTED_RUNNER: ${{ needs.select_macos_runner.outputs.label }}
+        run: |
+          if [[ "$SELECTOR_RESULT" != 'success' || -z "$SELECTED_RUNNER" ]]; then
+            echo "::error::The macOS runner selector did not succeed or did not return a runner label."
+            exit 1
+          fi
+
       - name: Checkout core candidate
         uses: actions/checkout@v6
         with:
@@ -79,9 +107,9 @@ jobs:
 
       - name: Set up Swift result verification
         id: maintenance
-        uses: agoodkind/lmd/.github/actions/setup-maintenance@426e79c9358c0d0d16f2b786acba7a93ffc9fc9c
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@763487338b00335c1dc9fb65d974d8d547519f85
         with:
-          ref: '426e79c9358c0d0d16f2b786acba7a93ffc9fc9c'
+          ref: '763487338b00335c1dc9fb65d974d8d547519f85'
 
       - name: Verify subprocess exit and ownership behavior
         run: |
