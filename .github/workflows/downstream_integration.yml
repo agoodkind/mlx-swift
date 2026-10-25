@@ -9,7 +9,7 @@ on:
         description: Exact SwiftLM commit to validate
         type: string
         required: true
-        default: dbf4eee36701d844996038b182a272f40a41f414
+        default: 4cc594d1cc6f88116f1509cee5ba5b6a1471f0be
       mlx_swift_lm_ref:
         description: Exact mlx-swift-lm commit to validate
         type: string
@@ -26,12 +26,16 @@ concurrency:
 jobs:
   lmd_consumer:
     name: LMD consumer
-    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@cdc7e518b471626a7e83d0681480ff2d2d504472
+    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@6a1892b4a386f3c323a560abf1b464e75ab3f317
     with:
-      lmd_ref: cdc7e518b471626a7e83d0681480ff2d2d504472
+      lmd_ref: 6a1892b4a386f3c323a560abf1b464e75ab3f317
       core_ref: ${{ github.event.pull_request.head.sha || github.sha }}
       library_ref: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
-      swiftlm_ref: ${{ inputs.swiftlm_ref || 'dbf4eee36701d844996038b182a272f40a41f414' }}
+      swiftlm_ref: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
+      library_profile: ${{ (inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352') == '60054f77f91bc3e77c44950054dd6a9b53359352' && 'library-runtime-60054f7' || '' }}
+      swiftlm_profile: ${{ (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == 'dbf4eee36701d844996038b182a272f40a41f414' && 'swiftlm-http-diagnostics-dbf4eee' || '' }}
+    secrets:
+      LOCAL_POOL_CAPACITY_TOKEN: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
 
   lmd_integration:
     name: LMD Integration
@@ -55,7 +59,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
       CORE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
-      SWIFTLM_REF: ${{ inputs.swiftlm_ref || 'dbf4eee36701d844996038b182a272f40a41f414' }}
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
       MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
       SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests|OwnFeatureHTTPTests)'
     steps:
@@ -78,11 +82,6 @@ jobs:
           path: mlx-swift-pr
           submodules: recursive
           persist-credentials: false
-
-      - name: Set up Node for result validation
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
 
       - name: Checkout SwiftLM
         uses: actions/checkout@v4
@@ -115,6 +114,12 @@ jobs:
           git -C SwiftLM/mlx-swift-lm rev-parse HEAD
           printf 'swiftlm=%s\nlibrary=%s\ncore=%s\n' "$SWIFTLM_REF" "$MLX_SWIFT_LM_REF" \
             "$(git -C mlx-swift-pr rev-parse HEAD)" > "$RUNNER_TEMP/swiftlm-sources.txt"
+
+      - name: Set up Swift result verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
+        with:
+          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
 
       - name: Build SwiftLM and tests in Debug
         working-directory: SwiftLM
@@ -183,7 +188,7 @@ jobs:
             echo "::error::SwiftLM tests failed with exit status $status."
             exit "$status"
           fi
-          node "$GITHUB_WORKSPACE/mlx-swift-pr/.github/scripts/verify-integration-results.mjs" swiftpm \
+          "${{ steps.maintenance.outputs.binary }}" verify-test-results swiftpm \
             "$RUNNER_TEMP/swiftlm-runtime.log" "$RUNNER_TEMP/swiftlm-tests.txt" \
             PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests OwnFeatureHTTPTests
 

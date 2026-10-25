@@ -15,20 +15,32 @@ jobs:
   encuda_process_tests:
     name: Encuda Process Tests (Linux)
     if: github.repository == 'agoodkind/mlx-swift'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container:
-      image: swift:6.2-rhel-ubi9
+      image: swift:6.3.2-noble@sha256:c4336909a71b2e69b884f4078cdf98c0cd081911632cb349ef72abc4cbed69fc
+    defaults:
+      run:
+        working-directory: mlx-swift
     steps:
+      - name: Install portable build dependencies
+        working-directory: ${{ github.workspace }}
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends make curl python3
+
       - name: Checkout core candidate
         uses: actions/checkout@v6
         with:
+          path: mlx-swift
           persist-credentials: false
 
-      - name: Set up Node for manifest fixtures
-        uses: actions/setup-node@v6
+      - name: Set up Swift maintenance verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
         with:
-          node-version: '24'
+          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
+          test-filter: LMDMaintenanceTests
 
       - name: Build portable subprocess tests
         run: |
@@ -39,32 +51,37 @@ jobs:
         run: '"$RUNNER_TEMP/encuda-process-tests"'
 
       - name: Verify Linux CUDA plugin identity fixtures
-        run: node --test .github/scripts/verify-spm-manifest.test.mjs
+        run: '"${{ steps.maintenance.outputs.binary }}" verify-manifest-fixtures "$GITHUB_WORKSPACE/mlx-swift"'
 
   fork_regression_tests:
     name: Fork Regression Tests
     if: github.repository == 'agoodkind/mlx-swift'
     runs-on: macos-26
     timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: mlx-swift
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
     steps:
       - name: Checkout core candidate
         uses: actions/checkout@v6
         with:
+          path: mlx-swift
           submodules: recursive
           persist-credentials: false
-
-      - name: Set up Node for result validation
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
 
       - name: Prepare Xcode and Metal toolchain
         run: |
           xcodebuild -version
           swift --version
           xcodebuild -downloadComponent MetalToolchain
+
+      - name: Set up Swift result verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
+        with:
+          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
 
       - name: Verify subprocess exit and ownership behavior
         run: |
@@ -75,7 +92,7 @@ jobs:
       - name: Verify CUDA manifest containment
         run: |
           python3 scripts/verify-spm-manifest.py
-          node --test .github/scripts/verify-spm-manifest.test.mjs
+          "${{ steps.maintenance.outputs.binary }}" verify-manifest-fixtures "$GITHUB_WORKSPACE/mlx-swift"
 
       - name: Run focused core regressions
         run: |
@@ -100,7 +117,7 @@ jobs:
         run: |
           xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/core-fork-regressions.xcresult" \
             --compact > "$RUNNER_TEMP/core-fork-regressions.json"
-          node .github/scripts/verify-integration-results.mjs xcode \
+          "${{ steps.maintenance.outputs.binary }}" verify-test-results xcode \
             "$RUNNER_TEMP/core-fork-regressions.json" \
             MLXTests/MLXArrayIndexingTests MLXTests/ForkProtectionTests MLXTests/StreamTests \
             MLXTests/LoggingTests MLXTests/CompileLockOrderingTests
@@ -113,9 +130,7 @@ jobs:
             -skipPackagePluginValidation -jobs 4
 
       - name: Verify compile-lock diagnostic exit behavior
-        env:
-          COMPILE_LOCK_REPRO_BINARY: ${{ runner.temp }}/mlx-core-derived/Build/Products/Debug/CompileLockRepro
-        run: node --test .github/scripts/compile-lock-repro.test.mjs
+        run: '"${{ steps.maintenance.outputs.binary }}" verify-compile-lock-repro "$RUNNER_TEMP/mlx-core-derived/Build/Products/Debug/CompileLockRepro"'
 
       - name: Upload core regression results
         if: always()

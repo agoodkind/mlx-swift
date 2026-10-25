@@ -7,28 +7,40 @@ on:
     branches: [main]
   schedule:
     - cron: '0 4 * * *' # Every day at 4:00 AM UTC
-  workflow_dispatch: # Enable manual triggers
+  workflow_dispatch:
 
 permissions: {}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   regression:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container: swift:6.3.2-noble@sha256:c4336909a71b2e69b884f4078cdf98c0cd081911632cb349ef72abc4cbed69fc
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
+      - name: Refresh Ubuntu package metadata
+        run: apt-get update
 
-      - name: Test upstream synchronization
-        run: node --test .github/scripts/upstream-sync.test.mjs
+      - name: Install portable build prerequisites
+        run: apt-get install --yes --no-install-recommends make curl
+
+      - name: Verify the fixed Swift upstream sync commands
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
+        with:
+          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
+          test-filter: UpstreamSyncTests
 
   sync:
     needs: regression
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    container: swift:6.3.2-noble@sha256:c4336909a71b2e69b884f4078cdf98c0cd081911632cb349ef72abc4cbed69fc
+    timeout-minutes: 60
     concurrency:
       group: upstream-sync
       cancel-in-progress: false
@@ -36,16 +48,30 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Checkout Code
+      - name: Refresh Ubuntu package metadata
+        run: apt-get update
+
+      - name: Install portable build and GitHub prerequisites
+        run: apt-get install --yes --no-install-recommends make curl gh
+
+      - name: Checkout the candidate repository
         uses: actions/checkout@v4
         with:
+          path: candidate
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up the fixed Swift upstream sync commands
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@12bebcd05bf2dca0110bca6e9eab818d6f664f55
+        with:
+          ref: '12bebcd05bf2dca0110bca6e9eab818d6f664f55'
+          test-filter: UpstreamSyncTests
+
       - name: Configure Git
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C candidate config user.name "github-actions[bot]"
+          git -C candidate config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Configure Git credentials
         env:
@@ -55,12 +81,14 @@ jobs:
       - name: Update upstream candidate
         id: sync_branch
         env:
+          MAINTENANCE_BIN: ${{ steps.maintenance.outputs.binary }}
           GH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
           SYNC_UPSTREAM_URL: https://github.com/ml-explore/mlx-swift.git
-        run: node .github/scripts/upstream-sync.mjs sync
+        run: '"$MAINTENANCE_BIN" sync-upstream "$GITHUB_WORKSPACE/candidate"'
 
       - name: Create or update pull request
         if: steps.sync_branch.outputs.has_changes == 'true'
         env:
+          MAINTENANCE_BIN: ${{ steps.maintenance.outputs.binary }}
           GH_TOKEN: ${{ secrets.SWIFTLM_PR_TOKEN }}
-        run: node .github/scripts/upstream-sync.mjs pr
+        run: '"$MAINTENANCE_BIN" create-sync-pull-request "$GITHUB_WORKSPACE/candidate"'
