@@ -247,8 +247,7 @@ _ = compiled(x) // still uses the OLD parameters
 // state (as `optimizer.update(...)` does in the `step` example above) and
 // you need that mutation written back to the real arrays.
 let fixed = compile(inputs: [model]) { (x: MLXArray) -> MLXArray in model(x) }
-optimizer.update(model: model, gradients: grads)
-eval(model, optimizer)
+_ = fixed(x)
 ```
 
 ### Compilation Options
