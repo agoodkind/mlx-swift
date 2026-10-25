@@ -86,7 +86,7 @@ jobs:
 
       - name: Build SwiftLM and tests in Release
         working-directory: SwiftLM
-        run: swift build --build-system native --jobs 4 -c release --build-tests
+        run: swift build --build-system native --jobs 4 -c release --build-tests -Xswiftc -enable-testing
 
       - name: Build Metal library from the selected core checkout
         run: |
@@ -128,14 +128,14 @@ jobs:
       - name: Run tests without pretrained models
         working-directory: SwiftLM
         run: |
-          swift test --build-system native --jobs 4 -c release list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
+          swift test --build-system native --jobs 4 -c release -Xswiftc -enable-testing list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
           for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests; do
             if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
               echo "::error::The selected SwiftLM commit does not provide $test_class."
               exit 1
             fi
           done
-          swift test --build-system native --jobs 4 -c release --skip-build --filter "$SWIFTLM_TEST_FILTER"
+          swift test --build-system native --jobs 4 -c release -Xswiftc -enable-testing --skip-build --filter "$SWIFTLM_TEST_FILTER"
 
       - name: Run optional pretrained speculative decoding evaluation
         if: github.event_name == 'workflow_dispatch' && inputs.run_speculative_eval
