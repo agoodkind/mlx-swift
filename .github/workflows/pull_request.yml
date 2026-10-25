@@ -51,6 +51,11 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
+      - name: Set up Node for result validation
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Prepare Xcode and Metal toolchain
         run: |
           xcodebuild -version
@@ -86,6 +91,16 @@ jobs:
             -only-testing:MLXTests/LoggingTests \
             -only-testing:MLXTests/CompileLockOrderingTests
 
+      - name: Verify selected core suites completed
+        if: always()
+        run: |
+          xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/core-fork-regressions.xcresult" \
+            --compact > "$RUNNER_TEMP/core-fork-regressions.json"
+          node .github/scripts/verify-integration-results.mjs xcode \
+            "$RUNNER_TEMP/core-fork-regressions.json" \
+            MLXTests/MLXArrayIndexingTests MLXTests/ForkProtectionTests MLXTests/StreamTests \
+            MLXTests/LoggingTests MLXTests/CompileLockOrderingTests
+
       - name: Build compile-lock stress diagnostic
         run: |
           xcodebuild build -scheme CompileLockRepro -configuration Debug \
@@ -103,7 +118,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: core-fork-regressions
-          path: ${{ runner.temp }}/core-fork-regressions.xcresult
+          path: |
+            ${{ runner.temp }}/core-fork-regressions.xcresult
+            ${{ runner.temp }}/core-fork-regressions.json
           if-no-files-found: error
 
   lint:

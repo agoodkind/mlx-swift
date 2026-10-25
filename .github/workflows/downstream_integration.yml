@@ -9,12 +9,12 @@ on:
         description: Exact SwiftLM commit to validate
         type: string
         required: true
-        default: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+        default: d2f09fb66097739de05c63397e18bd259edeadd0
       mlx_swift_lm_ref:
         description: Exact mlx-swift-lm commit to validate
         type: string
         required: true
-        default: 74ebe55d0d68de121f730334412da01a539eba50
+        default: 60054f77f91bc3e77c44950054dd6a9b53359352
 
 permissions:
   contents: read
@@ -30,9 +30,9 @@ jobs:
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      SWIFTLM_REF: ${{ inputs.swiftlm_ref || '53ae5b0da17f1b4484de4c01370e0ceb5a4fe079' }}
-      MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '74ebe55d0d68de121f730334412da01a539eba50' }}
-      SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests)'
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || 'd2f09fb66097739de05c63397e18bd259edeadd0' }}
+      MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
+      SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests|OwnFeatureHTTPTests)'
     steps:
       - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
@@ -40,6 +40,11 @@ jobs:
           path: mlx-swift-pr
           submodules: recursive
           persist-credentials: false
+
+      - name: Set up Node for result validation
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
 
       - name: Checkout SwiftLM
         uses: actions/checkout@v4
@@ -70,6 +75,8 @@ jobs:
           git -C SwiftLM rev-parse HEAD
           git -C SwiftLM/mlx-swift rev-parse HEAD
           git -C SwiftLM/mlx-swift-lm rev-parse HEAD
+          printf 'swiftlm=%s\nlibrary=%s\ncore=%s\n' "$SWIFTLM_REF" "$MLX_SWIFT_LM_REF" \
+            "$(git -C mlx-swift-pr rev-parse HEAD)" > "$RUNNER_TEMP/swiftlm-sources.txt"
 
       - name: Build SwiftLM and tests in Debug
         working-directory: SwiftLM
@@ -110,15 +117,46 @@ jobs:
           if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
             cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$BIN_DIR/nax"
           fi
+          echo "SWIFTLM_BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
 
       - name: Run tests without pretrained models
         working-directory: SwiftLM
         run: |
-          swift test --build-system native --jobs 4 list --skip-build > "$RUNNER_TEMP/swiftlm-tests.txt"
-          for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests; do
+          set -o pipefail
+          status=0
+          swift test --build-system native --jobs 4 --disable-swift-testing list --skip-build \
+            > "$RUNNER_TEMP/swiftlm-tests.txt" 2> "$RUNNER_TEMP/swiftlm-discovery-errors.txt" || status=$?
+          cat "$RUNNER_TEMP/swiftlm-discovery-errors.txt"
+          cat "$RUNNER_TEMP/swiftlm-tests.txt"
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::SwiftLM test discovery failed with exit status $status."
+            exit "$status"
+          fi
+          for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests OwnFeatureHTTPTests; do
             if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
               echo "::error::The selected SwiftLM commit does not provide $test_class."
               exit 1
             fi
           done
-          swift test --build-system native --jobs 4 --skip-build --filter "$SWIFTLM_TEST_FILTER"
+          status=0
+          swift test --build-system native --jobs 4 --disable-swift-testing --skip-build \
+            --filter "$SWIFTLM_TEST_FILTER" 2>&1 | tee "$RUNNER_TEMP/swiftlm-runtime.log" || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::SwiftLM tests failed with exit status $status."
+            exit "$status"
+          fi
+          node "$GITHUB_WORKSPACE/mlx-swift-pr/.github/scripts/verify-integration-results.mjs" swiftpm \
+            "$RUNNER_TEMP/swiftlm-runtime.log" "$RUNNER_TEMP/swiftlm-tests.txt" \
+            PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests OwnFeatureHTTPTests
+
+      - name: Upload SwiftLM source proof and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftlm-debug-results
+          path: |
+            ${{ runner.temp }}/swiftlm-sources.txt
+            ${{ runner.temp }}/swiftlm-tests.txt
+            ${{ runner.temp }}/swiftlm-discovery-errors.txt
+            ${{ runner.temp }}/swiftlm-runtime.log
+          if-no-files-found: error
