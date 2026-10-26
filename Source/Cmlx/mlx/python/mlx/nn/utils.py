@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional
 
 import mlx.core as mx
 
-from ..utils import tree_flatten, tree_map, tree_unflatten
+from ..utils import tree_flatten, tree_map, tree_reduce, tree_unflatten
 from .layers.base import Module
 
 
@@ -71,11 +71,35 @@ def checkpoint(module: Module, fn: Optional[Callable] = None):
     return wrapped_checkpointed_fn
 
 
+def _extract_info(flat):
+    keys = [k for k, _ in flat]
+    shapes = [g.shape for _, g in flat]
+    sizes = [g.size for _, g in flat]
+    dtypes = [g.dtype for _, g in flat]
+    return keys, shapes, sizes, dtypes
+
+
+def _group_by_size(keys, sizes, itemsize, communication_size):
+    grad_groups = []
+    grad_group = []
+    grad_group_size = 0
+    for i in range(len(keys)):
+        grad_group.append(i)
+        grad_group_size += sizes[i] * itemsize
+        if grad_group_size >= communication_size:
+            grad_groups.append(grad_group)
+            grad_group = []
+            grad_group_size = 0
+    if grad_group:
+        grad_groups.append(grad_group)
+        grad_group = []
+    return grad_groups
+
+
 def average_gradients(
     gradients: Any,
     group: Optional[mx.distributed.Group] = None,
     all_reduce_size: int = 32 * 1024**2,
-    communication_type: Optional[mx.Dtype] = None,
     communication_stream: Optional[mx.Stream] = None,
 ):
     """Average the gradients across the distributed processes in the passed group.
@@ -92,10 +116,7 @@ def average_gradients(
         all_reduce_size (int): Group arrays until their size in bytes exceeds
             this number. Perform one communication step per group of arrays. If
             less or equal to 0 array grouping is disabled. Default: ``32MiB``.
-        communication_type (Optional[mlx.core.Dtype]): If provided cast to this
-            type before performing the communication. Typically cast to a
-            smaller float to reduce the communication size. Default: ``None``.
-        communication_stream (Optional[mlx.core.Stream]): The stream to usse
+        communication_stream (Optional[mlx.core.Stream]): The stream to use
             for the communication. If unspecified the default communication
             stream is used which can vary by back-end. Default: ``None``.
     """
@@ -105,13 +126,16 @@ def average_gradients(
     if N == 1:
         return gradients
 
-    def _average(x):
-        dt = x.dtype
-        x = x.astype(communication_type) if communication_type is not None else x
-        return mx.distributed.all_sum(x, stream=communication_stream).astype(dt) / N
-
     if all_reduce_size <= 0:
-        return tree_map(_average, gradients)
+        return tree_map(
+            lambda x: mx.distributed.all_sum(
+                x,
+                group=group,
+                stream=communication_stream,
+            )
+            / N,
+            gradients,
+        )
 
     else:
         flat_grads = tree_flatten(gradients)
@@ -119,34 +143,13 @@ def average_gradients(
             return gradients
 
         # Extract some info for the gradient
-        keys = [k for k, _ in flat_grads]
-        shapes = [v.shape for _, v in flat_grads]
-        sizes = [v.size for _, v in flat_grads]
-        dtypes = [v.dtype for _, v in flat_grads]
+        keys, shapes, sizes, dtypes = _extract_info(flat_grads)
 
         # We can't group them if they have mixed types
         if not all(dt == dtypes[0] for dt in dtypes):
-            return average_gradients(gradients, group, 0, communication_type)
-        itemsize = (
-            communication_type.size
-            if communication_type is not None
-            else dtypes[0].size
-        )
-
+            return average_gradients(gradients, group, 0)
         # Gather the gradients in groups that are just above or equal to all_reduce_size
-        grad_groups = []
-        grad_group = []
-        grad_group_size = 0
-        for i in range(len(keys)):
-            grad_group.append(i)
-            grad_group_size += sizes[i] * itemsize
-            if grad_group_size >= all_reduce_size:
-                grad_groups.append(grad_group)
-                grad_group = []
-                grad_group_size = 0
-        if grad_group:
-            grad_groups.append(grad_group)
-            grad_group = []
+        grad_groups = _group_by_size(keys, sizes, dtypes[0].size, all_reduce_size)
 
         # Concatenate-reduce-split
         new_flat_grads = []
@@ -155,7 +158,12 @@ def average_gradients(
             big_grad = mx.concatenate(
                 [flat_grads[i][1].reshape(-1) for i in grad_group]
             )
-            big_grad = _average(big_grad)
+            big_grad = (
+                mx.distributed.all_sum(
+                    big_grad, stream=communication_stream, group=group
+                )
+                / N
+            )
             big_grad = mx.split(big_grad, indices[1:-1])
             new_flat_grads.extend(
                 (keys[j], big_grad[i].reshape(shapes[j]))
@@ -163,3 +171,38 @@ def average_gradients(
             )
 
         return tree_unflatten(new_flat_grads)
+
+
+def clip_grad_norm_sharded(
+    gradients: Any,
+    max_norm: float,
+    group: Optional[mx.distributed.Group] = None,
+):
+    """Clip the global norm of gradients that are sharded across a group.
+
+    This is the sharded equivalent of
+    :func:`mlx.optimizers.clip_grad_norm`. Each member of the group holds only
+    a shard of the gradients, so the global norm is computed by summing the
+    local squared norms across the group before rescaling. It is useful for
+    clipping the gradients of a module wrapped with :func:`mlx.nn.fully_shard`.
+
+    Args:
+        gradients (Any): A Python tree containing the local shard of the
+            gradient arrays.
+        max_norm (float): The maximum allowed global norm of the gradients.
+        group (Optional[mlx.core.distributed.Group]): The group across which
+            the gradients are sharded. If set to ``None`` the global group is
+            used. Default: ``None``.
+
+    Returns:
+        (Any, mlx.core.array): The possibly rescaled local shard of the
+        gradients and the global gradient norm.
+    """
+    local_norm_squared = tree_reduce(
+        lambda acc, g: acc + g.square().sum(), gradients, 0.0
+    )
+    global_norm_squared = mx.distributed.all_sum(local_norm_squared, group=group)
+    grad_norm = mx.sqrt(global_norm_squared)
+    normalizer = mx.minimum(max_norm / (grad_norm + 1e-6), 1.0)
+    clipped_gradients = tree_map(lambda g: g * normalizer, gradients)
+    return clipped_gradients, grad_norm

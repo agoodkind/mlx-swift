@@ -2,80 +2,232 @@ name: Downstream Integration Test
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      swiftlm_ref:
+        description: Exact SwiftLM commit to validate
+        type: string
+        required: true
+        default: 4cc594d1cc6f88116f1509cee5ba5b6a1471f0be
+      mlx_swift_lm_ref:
+        description: Exact mlx-swift-lm commit to validate
+        type: string
+        required: true
+        default: 60054f77f91bc3e77c44950054dd6a9b53359352
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  select_macos_runner:
+    name: Select macOS runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      label: ${{ steps.runner.outputs.label }}
+    steps:
+      - name: Use the shared macOS runner selector
+        id: runner
+        uses: agoodkind/swift-makefile/.github/actions/plan-runner@main
+        with:
+          runner: macos-26
+          capacity-token: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
+
+  lmd_consumer:
+    name: LMD consumer
+    uses: agoodkind/lmd/.github/workflows/lmd_integration.yml@939d18d8115767be6e2938d8f3fa96616613ba60
+    with:
+      lmd_ref: 939d18d8115767be6e2938d8f3fa96616613ba60
+      core_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      library_ref: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
+      swiftlm_ref: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
+      library_profile: ${{ (inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352') == '60054f77f91bc3e77c44950054dd6a9b53359352' && 'library-runtime-60054f7' || '' }}
+      swiftlm_profile: ${{ (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' && 'swiftlm-runtime-4cc594d' || (inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be') == 'dbf4eee36701d844996038b182a272f40a41f414' && 'swiftlm-http-diagnostics-dbf4eee' || '' }}
+    secrets:
+      LOCAL_POOL_CAPACITY_TOKEN: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
+
+  lmd_integration:
+    name: LMD Integration
+    needs: lmd_consumer
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful LMD validation
+        env:
+          LMD_RESULT: ${{ needs.lmd_consumer.result }}
+        run: |
+          if [[ "$LMD_RESULT" != 'success' ]]; then
+            echo "::error::LMD validation did not succeed. Result: $LMD_RESULT."
+            exit 1
+          fi
+
   test-swiftlm-umbrella:
     name: Test with SwiftLM (Umbrella Repo)
-    runs-on: macos-26
+    needs: select_macos_runner
+    if: ${{ !cancelled() }}
+    runs-on: ${{ needs.select_macos_runner.outputs.label || 'ubuntu-latest' }}
     timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      CORE_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+      SWIFTLM_REF: ${{ inputs.swiftlm_ref || '4cc594d1cc6f88116f1509cee5ba5b6a1471f0be' }}
+      MLX_SWIFT_LM_REF: ${{ inputs.mlx_swift_lm_ref || '60054f77f91bc3e77c44950054dd6a9b53359352' }}
+      SWIFTLM_TEST_FILTER: 'SwiftLMTests\.(PromptCacheTests|MultimodalTokenExtractionTests|ChatRequestParsingTests|ThinkingTagStripTests|OwnFeatureHTTPTests)'
     steps:
-      - name: Checkout PR branch (mlx-swift)
+      - name: Require successful macOS prerequisites
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          SELECTOR_RESULT: ${{ needs.select_macos_runner.result }}
+          SELECTED_RUNNER: ${{ needs.select_macos_runner.outputs.label }}
+        run: |
+          if [[ "$SELECTOR_RESULT" != 'success' || -z "$SELECTED_RUNNER" ]]; then
+            echo "::error::The macOS runner selector did not succeed or did not return a runner label."
+            exit 1
+          fi
+
+      - name: Align Xcode and the runtime CPU compiler
+        run: |
+          sudo xcode-select --switch "$DEVELOPER_DIR"
+          test "$(env -u DEVELOPER_DIR xcode-select --print-path)" = "$DEVELOPER_DIR"
+          xcrun --kill-cache
+          SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+          echo "SDKROOT=$SDKROOT" >> "$GITHUB_ENV"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --find clang++
+          g++ --version
+
+      - name: Checkout mlx-swift (this repository)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ env.CORE_REF }}
           path: mlx-swift-pr
           submodules: recursive
+          persist-credentials: false
 
-      - name: Checkout SwiftLM (Parent Repo)
+      - name: Checkout SwiftLM
         uses: actions/checkout@v4
         with:
           repository: agoodkind/SwiftLM
-          ref: 53ae5b0da17f1b4484de4c01370e0ceb5a4fe079
+          ref: ${{ env.SWIFTLM_REF }}
           path: SwiftLM
-          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
-      - name: Pin mlx-swift-lm submodule
+      - name: Select exact dependency commits
         run: |
-          git -C SwiftLM/mlx-swift-lm fetch --quiet origin a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
-          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach a8ce36ba06c3295575f7a91a2da5e60c4cadbb86
+          if [[ ! "$SWIFTLM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set swiftlm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          if [[ ! "$MLX_SWIFT_LM_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Set mlx_swift_lm_ref to a full 40-character commit SHA."
+            exit 1
+          fi
+          test "$(git -C SwiftLM rev-parse HEAD)" = "$SWIFTLM_REF"
+          git -C SwiftLM/mlx-swift-lm fetch --quiet origin "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift-lm checkout --quiet --detach "$MLX_SWIFT_LM_REF"
+          test "$(git -C SwiftLM/mlx-swift-lm rev-parse HEAD)" = "$MLX_SWIFT_LM_REF"
+          git -C SwiftLM/mlx-swift fetch --quiet --no-tags --depth=1 "$GITHUB_WORKSPACE/mlx-swift-pr" HEAD
+          git -C SwiftLM/mlx-swift checkout --quiet --detach FETCH_HEAD
+          test "$(git -C SwiftLM/mlx-swift rev-parse HEAD)" = "$(git -C mlx-swift-pr rev-parse HEAD)"
+          git -C SwiftLM rev-parse HEAD
+          git -C SwiftLM/mlx-swift rev-parse HEAD
+          git -C SwiftLM/mlx-swift-lm rev-parse HEAD
+          printf 'swiftlm=%s\nlibrary=%s\ncore=%s\n' "$SWIFTLM_REF" "$MLX_SWIFT_LM_REF" \
+            "$(git -C mlx-swift-pr rev-parse HEAD)" > "$RUNNER_TEMP/swiftlm-sources.txt"
 
-      - name: Show selected Xcode toolchain
-        run: |
-          xcodebuild -version
-          swift --version
-          xcodebuild -showComponent MetalToolchain || true
+      - name: Set up Swift result verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@ec18740170edb9c5c2216a9c6fe2789c3d9926b4
+        with:
+          ref: '2812aa0d79c00cda8185e11182e98ddea59eb6be'
 
-      - name: Resolve Dependencies (to populate SPM cache)
-        run: swift package resolve
+      - name: Build SwiftLM and tests in Debug
         working-directory: SwiftLM
+        run: swift build --build-system native --jobs 4 --build-tests
 
-      - name: Override mlx-swift dependency with PR checkout
-        # SwiftLM uses mlx-swift as a local path dependency (./mlx-swift submodule).
-        # SPM `package edit` cannot edit path dependencies, so we directly overwrite
-        # the submodule directory with our PR branch content.
+      - name: Build Metal library from the selected core checkout
         run: |
-          rsync -a --delete "$GITHUB_WORKSPACE/mlx-swift-pr/" "$GITHUB_WORKSPACE/SwiftLM/mlx-swift/"
-        working-directory: SwiftLM
+          xcodebuild -downloadComponent MetalToolchain
+          mkdir -p "$RUNNER_TEMP/mlx-metallib/lib"
+          cmake -S mlx-swift-pr/Source/Cmlx/mlx -B "$RUNNER_TEMP/mlx-metallib" \
+            -DCMAKE_BUILD_TYPE=Release -DMLX_METAL_JIT=OFF \
+            -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF \
+            -DMLX_BUILD_BENCHMARKS=OFF -DMLX_BUILD_PYTHON_BINDINGS=OFF \
+            -DMLX_METAL_PATH="$RUNNER_TEMP/mlx-metallib/lib"
+          cmake --build "$RUNNER_TEMP/mlx-metallib" --target mlx-metallib --parallel 4
+          KERNEL_BUILD="$RUNNER_TEMP/mlx-metallib/mlx/backend/metal/kernels"
+          if [[ -f "$KERNEL_BUILD/steel_gemm_fused_nax.air" ]]; then
+            mkdir -p "$RUNNER_TEMP/mlx-metallib/nax"
+            for kernel in steel_gemm_fused_nax steel_gemm_splitk_nax steel_gemm_gather_nax steel_gemm_segmented_nax steel_attention_nax quantized_nax fp_quantized_nax; do
+              xcrun -sdk macosx metal -mmacosx-version-min="$(sw_vers -productVersion)" \
+                "$KERNEL_BUILD/$kernel.air" -o "$RUNNER_TEMP/mlx-metallib/nax/$kernel.metallib"
+            done
+          else
+            echo "CMake did not enable NAX kernels for this SDK and deployment target."
+          fi
 
-      - name: Install MLX Metal library
+      - name: Colocate Metal libraries with the binary and test runner
+        working-directory: SwiftLM
         run: |
-          python3 -m venv /tmp/mlx_venv
-          /tmp/mlx_venv/bin/pip install --quiet mlx
-          METALLIB=$(echo /tmp/mlx_venv/lib/python*/site-packages/mlx/lib/mlx.metallib)
-          # Make it available system-wide for all subsequent steps
-          sudo cp "$METALLIB" /usr/local/lib/mlx.metallib || true
-          echo "MLX_METAL_LIB=$METALLIB" >> "$GITHUB_ENV"
+          BIN_DIR=$(swift build --build-system native --show-bin-path)
+          cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$BIN_DIR/mlx.metallib"
+          for test_bundle in "$BIN_DIR"/*.xctest; do
+            cp "$RUNNER_TEMP/mlx-metallib/lib/mlx.metallib" "$test_bundle/Contents/MacOS/mlx.metallib"
+            if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+              cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$test_bundle/Contents/MacOS/nax"
+            fi
+          done
+          if [[ -d "$RUNNER_TEMP/mlx-metallib/nax" ]]; then
+            cp -R "$RUNNER_TEMP/mlx-metallib/nax" "$BIN_DIR/nax"
+          fi
+          echo "SWIFTLM_BIN_DIR=$BIN_DIR" >> "$GITHUB_ENV"
 
-      - name: Build SwiftLM
-        run: swift build --build-tests
+      - name: Run tests without pretrained models
         working-directory: SwiftLM
-
-      - name: Copy Metal library to build outputs
         run: |
-          METALLIB="$MLX_METAL_LIB"
-          # Copy to all locations the test runner and linked bundles may search
-          find SwiftLM/.build -type d \( -name "debug" -o -name "release" \) -exec cp "$METALLIB" {}/ \; 2>/dev/null || true
-          find SwiftLM/.build -name "*.xctest" -exec cp "$METALLIB" {}/Contents/MacOS/ \; 2>/dev/null || true
-          find SwiftLM/.build -name "*Tests" -type f -exec sh -c 'cp "'"$METALLIB"'" "$(dirname "${1}")/"' _ {} \; 2>/dev/null || true
+          set -o pipefail
+          status=0
+          swift test --build-system native --jobs 4 --disable-swift-testing list --skip-build \
+            > "$RUNNER_TEMP/swiftlm-tests.txt" 2> "$RUNNER_TEMP/swiftlm-discovery-errors.txt" || status=$?
+          cat "$RUNNER_TEMP/swiftlm-discovery-errors.txt"
+          cat "$RUNNER_TEMP/swiftlm-tests.txt"
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::SwiftLM test discovery failed with exit status $status."
+            exit "$status"
+          fi
+          for test_class in PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests OwnFeatureHTTPTests; do
+            if ! grep -F "SwiftLMTests.$test_class/" "$RUNNER_TEMP/swiftlm-tests.txt"; then
+              echo "::error::The selected SwiftLM commit does not provide $test_class."
+              exit 1
+            fi
+          done
+          status=0
+          swift test --build-system native --jobs 4 --disable-swift-testing --skip-build \
+            --filter "$SWIFTLM_TEST_FILTER" 2>&1 | tee "$RUNNER_TEMP/swiftlm-runtime.log" || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::SwiftLM tests failed with exit status $status."
+            exit "$status"
+          fi
+          "${{ steps.maintenance.outputs.binary }}" verify-test-results swiftpm \
+            "$RUNNER_TEMP/swiftlm-runtime.log" "$RUNNER_TEMP/swiftlm-tests.txt" \
+            PromptCacheTests MultimodalTokenExtractionTests ChatRequestParsingTests ThinkingTagStripTests OwnFeatureHTTPTests
 
-      - name: Run SwiftLM Integration Tests
-        run: swift test --parallel --skip-build
-        working-directory: SwiftLM
+      - name: Upload SwiftLM source proof and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiftlm-debug-results
+          path: |
+            ${{ runner.temp }}/swiftlm-sources.txt
+            ${{ runner.temp }}/swiftlm-tests.txt
+            ${{ runner.temp }}/swiftlm-discovery-errors.txt
+            ${{ runner.temp }}/swiftlm-runtime.log
+          if-no-files-found: error

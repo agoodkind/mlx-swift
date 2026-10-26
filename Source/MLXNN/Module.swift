@@ -1,7 +1,7 @@
 // Copyright © 2024 Apple Inc.
 
 import Foundation
-import MLX
+@_spi(Sealing) import MLX
 
 /// `NestedDictionary` structure of `MLXArray`
 public typealias ModuleParameters = NestedDictionary<String, MLXArray>
@@ -106,12 +106,18 @@ open class Module {
     /// See ``noGrad()``
     private var _noGrad = Set<String>()
 
-    private var _items: ModuleItems!
-    private var _setters: [String: TypeErasedSetter]!
+    private var _items: ModuleItems?
+    private var _setters: [String: TypeErasedSetter]?
+
+    /// Sealed flag.  When `true`, all mutation entry points
+    /// (parameter/module updates, freeze/unfreeze, train) trap.  Set
+    /// recursively by ``_seal()`` after the module's parameters
+    /// have been replaced with `MaterializedArray` values (or sealed in
+    /// place) inside ``MaterializedModule``.
+    var _isSealed = false
 
     /// Initializes the module.
     public init() {
-        buildCaches()
     }
 
     private func buildCaches() {
@@ -124,6 +130,8 @@ open class Module {
 
                 if let (_, _, setter) = isModuleInfo(c.value) {
                     setters[key] = setter
+                } else if let provider = c.value as? TypeErasedSetterProvider {
+                    setters[key] = provider.typeErasedSetter()
                 }
             }
 
@@ -141,7 +149,13 @@ open class Module {
     ///
     /// Subclasses could potentially override this to provide custom introspection.
     open func items() -> ModuleItems {
-        _items
+        if _items == nil {
+            buildCaches()
+        }
+        guard let items = _items else {
+            fatalError("_items not set after buildCaches()")
+        }
+        return items
     }
 
     /// Describe extra parameters.
@@ -178,6 +192,49 @@ open class Module {
         } else {
             return ""
         }
+    }
+
+    /// Number of *logical* parameters at and beneath this module.
+    ///
+    /// This is intended for display, e.g. to describe the size of a loaded model
+    /// ("8B parameters").  It is not a measure of memory use -- for the physical
+    /// size sum the `nbytes` of ``parameters()``.
+    ///
+    /// For quantized layers (modules conforming to ``Quantized``) this reports the
+    /// count of the equivalent unquantized layer: the packed `weight` is counted as
+    /// `weight.size * 32 / bits` and the quantization metadata (`scales`, `biases`,
+    /// `global_scale`) is excluded.  Any other parameters (e.g. `bias` or parameters
+    /// added by a subclass, such as LoRA adapters) are counted as-is.
+    ///
+    /// This is best effort: it relies on the conventional parameter names above
+    /// and on quantized weights being packed into `uint32`.  Layers with unusual
+    /// storage may override it.
+    open var logicalParameterCount: Int {
+        let items = items()
+        var count = items.reduce(0) {
+            switch $1 {
+            case .parameters(let p):
+                $0 + p.size
+            case .module(let m):
+                $0 + m.logicalParameterCount
+            default:
+                $0
+            }
+        }
+
+        if let q = self as? Quantized, case .parameters(let w)? = items[unwrapping: "weight"] {
+            // replace the packed weight count with the logical (unpacked) count
+            count += w.size * 32 / q.bits - w.size
+
+            // quantization metadata is not part of the logical count
+            for key in ["scales", "biases", "global_scale"] {
+                if case .parameters(let p)? = items[unwrapping: key] {
+                    count -= p.size
+                }
+            }
+        }
+
+        return count
     }
 
     /// Recursively filter and map the contents of the module and its children and produce a `NestedDictionary`
@@ -421,6 +478,13 @@ open class Module {
     /// The ``apply(filter:map:)`` can be used for similar purposes to apply changes
     /// in-place.
     ///
+    /// > If this module is used inside a compiled closure (`compile()`) that does not
+    /// list the module in `inputs:`, calling `update(parameters:)` after the first compiled call
+    /// will not be observed by the compiled function -- `inputs:` is what makes `compile` re-read
+    /// current parameter values on every call. `outputs:` is only needed in addition when the
+    /// compiled closure itself mutates this module's parameters and the mutation should be
+    /// written back.
+    ///
     /// If a parameter is missing from the update and validation indicates `.allModelKeysSet` this
     /// will call ``updateMissing(parameter:verify:path:modulePath:)`` which will
     /// throw an error.  Subclasses can override this if needed.
@@ -444,7 +508,19 @@ open class Module {
         parameters: ModuleParameters, verify: VerifyUpdate, path: [String] = [],
         modulePath: [String] = []
     ) throws -> Self {
+        _checkNotSealed()
+        try update(parameters: parameters, verify: verify, path: path, modulePath: modulePath) {
+            m, k, a, v in
+            a._updateInternal(v)
+        }
+        return self
+    }
 
+    func update(
+        parameters: ModuleParameters, verify: VerifyUpdate, path: [String] = [],
+        modulePath: [String] = [],
+        mutate: (Module, String, MLXArray, MLXArray) -> Void
+    ) throws {
         let modulePath = modulePath + [describeType(self)]
 
         func apply(
@@ -466,7 +542,7 @@ open class Module {
                         path: path, modules: modulePath, expectedShape: p.shape,
                         actualShape: newArray.shape)
                 }
-                p._updateInternal(newArray)
+                mutate(self, key, p, newArray)
 
             case (.value(.parameters), .none):
                 if Self.parameterIsValid(key) {
@@ -495,7 +571,7 @@ open class Module {
                 for (dictionaryKey, dictionaryItem) in dictionary {
                     let newKey = "\(key).\(dictionaryKey)"
                     let path = path + [dictionaryKey]
-                    if let valueItem = values[key] {
+                    if let valueItem = values[dictionaryKey] {
                         try apply(key: newKey, path: path, dictionaryItem, valueItem)
                     } else if verify.contains(.allModelKeysSet) {
                         try apply(key: newKey, path: path, dictionaryItem, .none)
@@ -512,12 +588,12 @@ open class Module {
             case (.value(.module(let module)), .dictionary(let values)):
                 try module.update(
                     parameters: NestedDictionary(values: values), verify: verify, path: path,
-                    modulePath: modulePath)
+                    modulePath: modulePath, mutate: mutate)
 
             case (.value(.module(let module)), .none):
                 try module.update(
                     parameters: NestedDictionary(), verify: verify, path: path,
-                    modulePath: modulePath)
+                    modulePath: modulePath, mutate: mutate)
 
             case (.none, .none), (.value(.none), .none), (.value(.other(_)), .none):
                 break
@@ -543,8 +619,63 @@ open class Module {
             throw UpdateError.unhandledKeys(
                 path: path, modules: modulePath, keys: processed.sorted())
         }
+    }
 
-        return self
+    /// Recursively seal this module and all of its descendants so that any
+    /// further mutation (parameter updates, module replacement, freeze /
+    /// unfreeze, train mode) traps with `fatalError`.
+    ///
+    /// Called from ``MaterializedModule`` after the consumed base has been
+    /// materialized.  This is the runtime backstop for the `consuming`
+    /// ownership contract: even if a caller retains a stale reference and
+    /// tries to mutate the wrapped module, the call will trap rather than
+    /// silently violate the `Sendable` invariant.
+    func _seal() {
+        visit { _, m in
+            m._isSealed = true
+        }
+    }
+
+    private func _checkNotSealed(_ caller: StaticString = #function) {
+        if _isSealed {
+            fatalError(
+                "\(describeType(self)).\(caller): module has been sealed against "
+                    + "mutation by MaterializedModule.  The original reference "
+                    + "must not be retained or used after the module is consumed.")
+        }
+    }
+
+    func materialize() {
+        // bulk eval the parameters
+        eval(self.parameters())
+
+        // now convert to MaterializedArray (where possible)
+        let newParameters = filterMap(
+            filter: { _, _, _ in true },
+            map: Self.mapParameters(map: { $0.materialized() as MLXArray }))
+
+        // not verifying and setting with same value -- any
+        // errors are programming errors
+        try! update(parameters: newParameters, verify: .none) { m, k, a, v in
+            if let setter = m._setters?[k] {
+                do {
+                    // use the setter to replace the array
+                    try setter.update(v)
+                } catch {
+                    a._seal()
+                }
+            } else {
+                // can't replace it (e.g. `let`) -- it is already evaluated,
+                // so seal it in place.  `_seal()` is idempotent, so an array
+                // shared between several parameters (tied weights) is fine.
+                a._seal()
+            }
+        }
+
+        // some of the properties were updated so rebuild the properties cache
+        visit { key, m in
+            m.buildCaches()
+        }
     }
 
     /// Called from ``update(parameters:verify:path:modulePath:)`` if a required parameter
@@ -581,7 +712,8 @@ open class Module {
         filter: (Module, String, ModuleItem) -> Bool = Module.filterValidParameters,
         map: @escaping (MLXArray) -> MLXArray
     ) -> Self {
-        update(parameters: filterMap(filter: filter, map: Self.mapParameters(map: map)))
+        _checkNotSealed()
+        return update(parameters: filterMap(filter: filter, map: Self.mapParameters(map: map)))
     }
 
     /// A non-throwing version of ``update(modules:verify:path:modulePath:)``.
@@ -642,6 +774,7 @@ open class Module {
         modules: ModuleChildren, verify: VerifyUpdate, path: [String] = [],
         modulePath: [String] = []
     ) throws -> Self {
+        _checkNotSealed()
 
         let modulePath = modulePath + [describeType(self)]
 
@@ -786,9 +919,14 @@ open class Module {
     ///   - key: module key, see ``ModuleInfo``
     ///   - value: the replacement module
     open func updateModule(key: String, _ value: Any) throws {
-        if let setter = _setters[key] {
+        _checkNotSealed()
+        if _setters == nil {
+            buildCaches()
+        }
+
+        if let setter = _setters?[key] {
             do {
-                try setter.updateModule(value)
+                try setter.update(value)
             } catch {
                 throw UpdateError.needModuleInfo(
                     "Unable to set modules for \(describeType(self)).\(key) -- maybe type mismatch: \(describeType(value)), \(error)"
@@ -896,6 +1034,7 @@ open class Module {
     /// - ``freeze(recursive:keys:)``
     /// - ``unfreeze(recursive:keys:strict:)``
     open func freeze(recursive: Bool = true, keys: [String]? = nil, strict: Bool = false) throws {
+        _checkNotSealed()
         let visitor = freezeVisitor(keys: keys, strict: strict) {
             $0._noGrad.formUnion($1)
             $0.didSetNoGrad($0._noGrad)
@@ -934,6 +1073,7 @@ open class Module {
     /// - ``Module/freeze(recursive:keys:)``
     /// - ``Module/unfreeze(recursive:keys:strict:)``
     open func unfreeze(recursive: Bool = true, keys: [String]? = nil, strict: Bool = false) throws {
+        _checkNotSealed()
         let visitor = freezeVisitor(keys: keys, strict: strict) {
             $0._noGrad.subtract($1)
             $0.didSetNoGrad($0._noGrad)
@@ -974,6 +1114,7 @@ open class Module {
     /// - ``training``
     /// - ``didSetTrain(_:)``
     public func train(_ mode: Bool = true) {
+        _checkNotSealed()
         visit(modules: {
             $1.training = mode
             $1.didSetTrain(mode)
@@ -1391,7 +1532,7 @@ public enum ModuleValue {
 /// ### See Also
 /// - <doc:custom-layers>
 /// - ``ModuleInfo``
-@propertyWrapper public class ParameterInfo<T> {
+@propertyWrapper public class ParameterInfo<T>: TypeErasedSetterProvider {
     var value: T?
     let key: String?
 
@@ -1437,11 +1578,48 @@ public enum ModuleValue {
 
         // cannot check via unwapProperty -- see wrappedValue.set
     }
+
+    // See also ModuleInfo.Setter
+    struct Setter: TypeErasedSetter {
+        unowned var info: ParameterInfo<T>
+
+        func update(_ value: Any) throws {
+            if let value = value as? T {
+                info.value = value
+            } else if let value = value as? [MLXArray] {
+                // try to recast as a tuple, e.g.
+                // @ParameterInfo var x: (MLXArray, MLXArray)
+
+                if value.count == 2, let values = (value[0], value[1]) as? T {
+                    info.value = values
+                } else if value.count == 3, let values = (value[0], value[1], value[2]) as? T {
+                    info.value = values
+                } else if value.count == 4,
+                    let values = (value[0], value[1], value[2], value[3]) as? T
+                {
+                    info.value = values
+                } else if value.count == 5,
+                    let values = (value[0], value[1], value[2], value[3], value[4]) as? T
+                {
+                    info.value = values
+                } else {
+                    throw UpdateError.unableToCast(String(describing: T.self))
+                }
+            } else {
+                throw UpdateError.unableToCast(String(describing: T.self))
+            }
+        }
+    }
+
+    fileprivate func typeErasedSetter() -> TypeErasedSetter {
+        Setter(info: self)
+    }
+
 }
 
 /// Helper protocol for writing back through ``ModuleInfo``, e.g. via ``Module/update(modules:)``
 private protocol TypeErasedSetter {
-    func updateModule(_ value: Any) throws
+    func update(_ value: Any) throws
 }
 
 private protocol TypeErasedSetterProvider {
@@ -1549,10 +1727,11 @@ private protocol TypeErasedSetterProvider {
         }
     }
 
+    // See also ParameterInfo.Setter
     struct Setter: TypeErasedSetter {
         unowned var info: ModuleInfo<T>
 
-        func updateModule(_ value: Any) throws {
+        func update(_ value: Any) throws {
             if let value = value as? T {
                 info.module = value
             } else if let value = value as? [Module] {
@@ -1568,7 +1747,7 @@ private protocol TypeErasedSetterProvider {
                 {
                     info.module = values
                 } else if value.count == 5,
-                    let values = (value[0], value[1], value[2], value[4], value[5]) as? T
+                    let values = (value[0], value[1], value[2], value[3], value[4]) as? T
                 {
                     info.module = values
                 } else {

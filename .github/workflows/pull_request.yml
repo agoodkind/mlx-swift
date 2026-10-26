@@ -1,11 +1,175 @@
 name: Build and Test
 
-on: pull_request
+on:
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  select_macos_runner:
+    name: Select macOS runner
+    if: github.repository == 'agoodkind/mlx-swift'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      label: ${{ steps.runner.outputs.label }}
+    steps:
+      - name: Use the shared macOS runner selector
+        id: runner
+        uses: agoodkind/swift-makefile/.github/actions/plan-runner@main
+        with:
+          runner: macos-26
+          capacity-token: ${{ secrets.LOCAL_POOL_CAPACITY_TOKEN }}
+
+  encuda_process_tests:
+    name: Encuda Process Tests (Linux)
+    if: github.repository == 'agoodkind/mlx-swift'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: swift:6.3.2-noble@sha256:c4336909a71b2e69b884f4078cdf98c0cd081911632cb349ef72abc4cbed69fc
+    defaults:
+      run:
+        working-directory: mlx-swift
+    steps:
+      - name: Install portable build dependencies
+        working-directory: ${{ github.workspace }}
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends make curl python3
+
+      - name: Checkout core candidate
+        uses: actions/checkout@v6
+        with:
+          path: mlx-swift
+          persist-credentials: false
+
+      - name: Set up Swift maintenance verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@ec18740170edb9c5c2216a9c6fe2789c3d9926b4
+        with:
+          ref: '2812aa0d79c00cda8185e11182e98ddea59eb6be'
+          test-filter: LMDMaintenanceTests
+
+      - name: Build portable subprocess tests
+        run: |
+          swiftc -swift-version 6 Source/Encuda/encuda-utils.swift \
+            Tests/EncudaProcessTests/ProcessTests.swift -o "$RUNNER_TEMP/encuda-process-tests"
+
+      - name: Verify subprocess exit and ownership behavior
+        run: '"$RUNNER_TEMP/encuda-process-tests"'
+
+      - name: Verify Linux CUDA plugin identity fixtures
+        run: '"${{ steps.maintenance.outputs.binary }}" verify-manifest-fixtures "$GITHUB_WORKSPACE/mlx-swift"'
+
+  fork_regression_tests:
+    name: Fork Regression Tests
+    if: ${{ !cancelled() && (github.repository == 'agoodkind/mlx-swift') }}
+    needs: select_macos_runner
+    runs-on: ${{ needs.select_macos_runner.outputs.label || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: mlx-swift
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - name: Require successful macOS prerequisites
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          SELECTOR_RESULT: ${{ needs.select_macos_runner.result }}
+          SELECTED_RUNNER: ${{ needs.select_macos_runner.outputs.label }}
+        run: |
+          if [[ "$SELECTOR_RESULT" != 'success' || -z "$SELECTED_RUNNER" ]]; then
+            echo "::error::The macOS runner selector did not succeed or did not return a runner label."
+            exit 1
+          fi
+
+      - name: Checkout core candidate
+        uses: actions/checkout@v6
+        with:
+          path: mlx-swift
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Prepare Xcode and Metal toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcodebuild -downloadComponent MetalToolchain
+
+      - name: Set up Swift result verification
+        id: maintenance
+        uses: agoodkind/lmd/.github/actions/setup-maintenance@ec18740170edb9c5c2216a9c6fe2789c3d9926b4
+        with:
+          ref: '2812aa0d79c00cda8185e11182e98ddea59eb6be'
+
+      - name: Verify subprocess exit and ownership behavior
+        run: |
+          swiftc -swift-version 6 Source/Encuda/encuda-utils.swift \
+            Tests/EncudaProcessTests/ProcessTests.swift -o "$RUNNER_TEMP/encuda-process-tests"
+          "$RUNNER_TEMP/encuda-process-tests"
+
+      - name: Verify CUDA manifest containment
+        run: |
+          python3 scripts/verify-spm-manifest.py
+          "${{ steps.maintenance.outputs.binary }}" verify-manifest-fixtures "$GITHUB_WORKSPACE/mlx-swift"
+
+      - name: Run focused core regressions
+        run: |
+          xcodebuild test \
+            -scheme mlx-swift-Package \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/mlx-core-derived" \
+            -resultBundlePath "$RUNNER_TEMP/core-fork-regressions.xcresult" \
+            -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            -jobs 4 \
+            -only-testing:MLXTests/MLXArrayIndexingTests \
+            -only-testing:MLXTests/ForkProtectionTests \
+            -only-testing:MLXTests/StreamTests/testDefaultCPUStreamResolvesOnCurrentThread \
+            -only-testing:MLXTests/StreamTests/testGPUArrayEvaluatesOnAnotherThread \
+            -only-testing:MLXTests/LoggingTests \
+            -only-testing:MLXTests/CompileLockOrderingTests
+
+      - name: Verify selected core suites completed
+        if: always()
+        run: |
+          xcrun xcresulttool get test-results tests --path "$RUNNER_TEMP/core-fork-regressions.xcresult" \
+            --compact > "$RUNNER_TEMP/core-fork-regressions.json"
+          "${{ steps.maintenance.outputs.binary }}" verify-test-results xcode \
+            "$RUNNER_TEMP/core-fork-regressions.json" \
+            MLXTests/MLXArrayIndexingTests MLXTests/ForkProtectionTests MLXTests/StreamTests \
+            MLXTests/LoggingTests MLXTests/CompileLockOrderingTests
+
+      - name: Build compile-lock stress diagnostic
+        run: |
+          xcodebuild build -scheme CompileLockRepro -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/mlx-core-derived" \
+            -skipPackagePluginValidation -jobs 4
+
+      - name: Verify compile-lock diagnostic exit behavior
+        run: '"${{ steps.maintenance.outputs.binary }}" verify-compile-lock-repro "$RUNNER_TEMP/mlx-core-derived/Build/Products/Debug/CompileLockRepro"'
+
+      - name: Upload core regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-fork-regressions
+          path: |
+            ${{ runner.temp }}/core-fork-regressions.xcresult
+            ${{ runner.temp }}/core-fork-regressions.json
+          if-no-files-found: error
+
   lint:
     if: github.repository == 'ml-explore/mlx-swift'
     runs-on: ubuntu-latest
@@ -83,6 +247,9 @@ jobs:
         shell: bash
         run: xcodebuild -showComponent MetalToolchain
 
+      - name: Verify SwiftPM manifest CUDA containment
+        run: scripts/verify-spm-manifest.py
+
       - name: Setup cmake
         shell: sh
         run: |
@@ -118,6 +285,13 @@ jobs:
         run: |
           xcrun xctest ~/Library/Developer/Xcode/DerivedData/mlx-swift-*/Build/Products/Debug/CmlxTests.xctest
           xcrun xctest ~/Library/Developer/Xcode/DerivedData/mlx-swift-*/Build/Products/Debug/MLXTests.xctest
+          xcrun xctest ~/Library/Developer/Xcode/DerivedData/mlx-swift-*/Build/Products/Debug/MLXIntegrationTests.xctest
+
+      - name: Run Distributed Tests SwiftPM (Xcode, macOS)
+        shell: sh
+        run: |
+          MLX_TEST_DISTRIBUTED=1 xcrun xctest -XCTest DistributedRingTests ~/Library/Developer/Xcode/DerivedData/mlx-swift-*/Build/Products/Debug/MLXTests.xctest
+          MLX_TEST_DISTRIBUTED=1 xcrun xctest -XCTest DistributedNNRingTests ~/Library/Developer/Xcode/DerivedData/mlx-swift-*/Build/Products/Debug/MLXTests.xctest
 
       - name: Build xcodeproj (Xcode, macOS)
         shell: sh
@@ -159,20 +333,26 @@ jobs:
   linux_build_cmake_container:
     name: Linux Container CMake Swift Build (${{ matrix.container }} ${{ matrix.arch }})
     needs: lint
+    if: github.repository == 'ml-explore/mlx-swift'
     strategy:
       fail-fast: false
       matrix:
         include:
           # See https://github.com/swiftlang/swift-docker/tree/main/
+          #
+          # Note: mlx-c uses std::format, which requires libstdc++ >= 13 (or
+          # libc++ >= 17).  Debian bookworm only ships gcc/libstdc++ 12 (and
+          # gcc-13 is not available in bookworm-backports), so use Ubuntu
+          # noble (24.04, gcc/libstdc++ 13) for the Debian-family build.
           - host: ubuntu-22.04
             arch: x86_64
-            container: swift:bookworm
+            container: swift:noble
           - host: ubuntu-22.04
             arch: x86_64
             container: swift:fedora39
           - host: ubuntu-22.04-arm
             arch: aarch64
-            container: swift:bookworm
+            container: swift:noble
           - host: ubuntu-22.04-arm
             arch: aarch64
             container: swift:fedora39
@@ -191,6 +371,7 @@ jobs:
   linux_build_cmake_cuda:
     name: Linux CUDA CMake Swift Build (cuda-12.9, swift-6.2.3-RELEASE, ubuntu-24.04, x86_64)
     needs: lint
+    if: github.repository == 'ml-explore/mlx-swift'
     runs-on: "gpu-t4-4-core"
     env:
       # Note 12/18/2025: the CI machine does not meet CUDA 13's driver requirement.

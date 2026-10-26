@@ -28,20 +28,27 @@ struct Add {
 
 struct FloorDivide {
   template <typename T>
-  T operator()(T x, T y) thread {
+  metal::enable_if_t<metal::is_integral_v<T> & !metal::is_signed_v<T>, T>
+  operator()(T x, T y) thread {
     return x / y;
   }
-  template <>
-  float operator()(float x, float y) thread {
-    return trunc(x / y);
+  template <typename T>
+  metal::enable_if_t<metal::is_integral_v<T> & metal::is_signed_v<T>, T>
+  operator()(T x, T y) thread {
+    auto q = x / y;
+    if (x % y != 0 && (x < 0) != (y < 0)) {
+      q -= 1;
+    }
+    return q;
+  }
+  template <typename T>
+  metal::enable_if_t<!metal::is_integral_v<T>, T> operator()(T x, T y) thread {
+    return floor(x / y);
   }
   template <>
-  half operator()(half x, half y) thread {
-    return trunc(x / y);
-  }
-  template <>
-  bfloat16_t operator()(bfloat16_t x, bfloat16_t y) thread {
-    return trunc(x / y);
+  complex64_t operator()(complex64_t x, complex64_t y) thread {
+    // Complex is not supported, simply make compiler happy.
+    return x / y;
   }
 };
 
@@ -447,15 +454,24 @@ template <typename U>
 struct CumMax {
   static constexpr constant U init = Limits<U>::min;
 
+  static U combine(U a, U b) {
+    if constexpr (metal::is_floating_point_v<U>) {
+      if (metal::isnan(a) || metal::isnan(b)) {
+        return metal::numeric_limits<U>::quiet_NaN();
+      }
+    }
+    return (a >= b) ? a : b;
+  }
+
   template <typename T>
   U operator()(U a, T b) thread {
-    return (a >= b) ? a : b;
+    return combine(a, static_cast<U>(b));
   }
 
   U simd_scan(U x) thread {
     for (int i = 1; i <= 16; i *= 2) {
       U other = simd_shuffle_and_fill_up(x, init, i);
-      x = (x >= other) ? x : other;
+      x = combine(x, other);
     }
     return x;
   }
@@ -470,15 +486,24 @@ template <typename U>
 struct CumMin {
   static constexpr constant U init = Limits<U>::max;
 
+  static U combine(U a, U b) {
+    if constexpr (metal::is_floating_point_v<U>) {
+      if (metal::isnan(a) || metal::isnan(b)) {
+        return metal::numeric_limits<U>::quiet_NaN();
+      }
+    }
+    return (a <= b) ? a : b;
+  }
+
   template <typename T>
   U operator()(U a, T b) thread {
-    return (a <= b) ? a : b;
+    return combine(a, static_cast<U>(b));
   }
 
   U simd_scan(U x) thread {
     for (int i = 1; i <= 16; i *= 2) {
       U other = simd_shuffle_and_fill_up(x, init, i);
-      x = (x <= other) ? x : other;
+      x = combine(x, other);
     }
     return x;
   }

@@ -152,13 +152,40 @@ TEST_CASE("test export function with variable inputs") {
 TEST_CASE("test export function on different stream") {
   std::string file_path = get_temp_file("model.mlxfn");
 
-  // Caller is responsible for setting up streams before
-  // importing functoins
   auto fun = [](const std::vector<array>& args) -> std::vector<array> {
     return {abs(args[0], Stream(1000, Device::cpu))};
   };
 
   export_function(file_path, fun, {array({0, 1, 2})});
 
-  CHECK_THROWS(import_function(file_path));
+  // Should make a new stream that we can run computation on
+  eval(import_function(file_path)({array({0, 1, 2})}));
+}
+
+TEST_CASE("test export import with metadata") {
+  std::string file_path = get_temp_file("model.mlxfn");
+
+  auto fun = [](const std::vector<array>& args) -> std::vector<array> {
+    return {abs(args[0])};
+  };
+
+  std::string metadata = "{\"name\": \"model\", \"params\": 7000000000}";
+
+  export_function(file_path, fun, {array({0, 1, 2})}, false, metadata);
+
+  auto imported = import_function(file_path);
+  CHECK(imported.metadata() == metadata);
+  eval(imported({array({0, 1, 2})}));
+
+  // No metadata gives an empty string
+  export_function(file_path, fun, {array({0, 1, 2})});
+  CHECK(import_function(file_path).metadata().empty());
+
+  // Metadata survives the per-trace header rewrite of a multi-trace export
+  {
+    auto fn_exporter = exporter(file_path, fun, false, metadata);
+    fn_exporter({array({0, 1})});
+    fn_exporter({array({0, 1, 2})});
+  }
+  CHECK(import_function(file_path).metadata() == metadata);
 }

@@ -33,7 +33,7 @@ class RNN(Module):
         hidden_size (int): Dimension of the hidden state, ``H``.
         bias (bool, optional): Whether to use a bias. Default: ``True``.
         nonlinearity (callable, optional): Non-linearity to use. If ``None``,
-            then func:`tanh` is used. Default: ``None``.
+            then :func:`tanh` is used. Default: ``None``.
     """
 
     def __init__(
@@ -184,6 +184,8 @@ class GRU(Module):
 
             if hidden is not None:
                 n = n + r * h_proj_n
+            elif self.bhn is not None:
+                n = n + r * self.bhn
             n = mx.tanh(n)
 
             if hidden is not None:

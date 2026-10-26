@@ -23,7 +23,6 @@ extension MLXArrayIndexOperation: Equatable {
 class MLXArrayIndexingTests: XCTestCase {
 
     override class func setUp() {
-        setDefaultDevice()
     }
 
     // MARK: - Subscript (get)
@@ -638,6 +637,16 @@ class MLXArrayIndexingTests: XCTestCase {
         // a[::-1, :2, i, 2:, ..., None, ::2] = 1
         check(
             [.stride(by: -1), ..<2, i, 2..., .ellipsis, .newAxis, .stride(by: 2)], 128142)
+    }
+
+    public func testCopyEllipsis() {
+        let source = MLXArray(0 ..< 12, [3, 4])
+        let copy = source[.ellipsis]
+
+        copy[.ellipsis, 1] *= 10
+
+        assertEqual(source, MLXArray(0 ..< 12, [3, 4]))
+        assertEqual(copy, MLXArray([0, 10, 2, 3, 4, 50, 6, 7, 8, 90, 10, 11], [3, 4]))
     }
 
     public func testSliceWithBroadcast() {

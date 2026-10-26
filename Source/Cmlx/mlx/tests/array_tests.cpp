@@ -105,6 +105,16 @@ TEST_CASE("test array basics") {
     CHECK_EQ(x.dtype(), bool_);
     CHECK(array_equal(x, array({false, true, false, true})).item<bool>());
   }
+
+  // Regression: vector<bool>::reference to fp16/bf16 stored raw bits
+  {
+    std::vector<bool> data = {true, false, true};
+    auto bf = array(data.begin(), {3}, bfloat16);
+    CHECK(array_equal(bf, array({1.0f, 0.0f, 1.0f}, bfloat16)).item<bool>());
+
+    auto fp = array(data.begin(), {3}, float16);
+    CHECK(array_equal(fp, array({1.0f, 0.0f, 1.0f}, float16)).item<bool>());
+  }
 }
 
 TEST_CASE("test array types") {
@@ -660,4 +670,23 @@ TEST_CASE("test negative indexing for shape/strides") {
   // Invalid: too positive
   CHECK_THROWS_AS(a.shape(2), std::out_of_range);
   CHECK_THROWS_AS(a.strides(2), std::out_of_range);
+}
+
+// https://github.com/ml-explore/mlx/pull/1590
+TEST_CASE("test siblings circular references without eval") {
+  std::weak_ptr<array::Data> tracker;
+  auto fun = [&]() {
+    array key({1, 2});
+    auto splits = split(key, 2);
+    {
+      // Set fake data as a tracker for ArrayDesc's lifetime.
+      splits[0].set_data(allocator::malloc(0));
+      tracker = splits[0].data_shared_ptr();
+    }
+    auto a = reshape(splits[0], {});
+    auto b = reshape(splits[1], {});
+    return b;
+  };
+  fun();
+  CHECK(tracker.expired());
 }

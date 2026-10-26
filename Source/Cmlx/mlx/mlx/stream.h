@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <tuple>
 #include <vector>
 
 #include "mlx/api.h"
@@ -17,7 +18,7 @@ struct MLX_API Stream {
   // TODO: Use default three-way comparison when it gets supported in XCode.
   bool operator==(const Stream&) const = default;
   bool operator<(const Stream& rhs) const {
-    return device < rhs.device || index < rhs.index;
+    return std::tie(device, index) < std::tie(rhs.device, rhs.index);
   }
 };
 
@@ -33,6 +34,9 @@ MLX_API void set_default_stream(Stream s);
 
 /** Make a new stream on the given device. */
 MLX_API Stream new_stream(Device d);
+
+/** Make a new stream that can be used in any thread. */
+MLX_API Stream new_thread_unsafe_stream(Device d);
 
 /** Make a new stream that will be unique per thread. */
 MLX_API ThreadLocalStream new_thread_local_stream(Device d);

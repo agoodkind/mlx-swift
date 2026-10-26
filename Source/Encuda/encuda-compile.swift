@@ -61,23 +61,55 @@ extension Encuda {
                 let archArgs =
                     ProcessInfo.processInfo.environment["CUDA_ARCH"].map { ["-arch", $0] } ?? []
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: resolvedNvcc)
-                process.arguments =
-                    ["-cuda", "-rdc=true", "--expt-relaxed-constexpr"] + stdArgs + ccbinArgs
-                    + archArgs
-                    + (verbose ? ["-v"] : []) + includeArgs + inputFiles + ["-o", output]
-                try process.run()
-                process.waitUntilExitWorkaround()
-                guard process.terminationStatus == 0 else {
-                    throw EncudaError.nvccFailed(process.terminationStatus)
+                let verboseArgs: [String] = verbose ? ["-v"] : []
+
+                // Built up in steps rather than as one `+` chain, which is expensive
+                // to type-check and gets more so with each argument added.
+                var arguments: [String] = ["-cuda", "-rdc=true", "--expt-relaxed-constexpr"]
+                arguments += stdArgs
+                arguments += ccbinArgs
+                arguments += archArgs
+                arguments += verboseArgs
+                arguments += includeArgs
+                arguments += inputFiles
+                arguments += ["-o", output]
+
+                let status = try runTool(
+                    executable: URL(fileURLWithPath: resolvedNvcc), arguments: arguments)
+                guard status == 0 else {
+                    throw EncudaError.nvccFailed(status)
                 }
+                writeStamp()
             #endif
+        }
+
+        /// Inputs to the generated `.cpp` that are not themselves input *files*.
+        /// A modification-time comparison cannot see any of these change, so the
+        /// signature is stamped beside the output and compared on the next run.
+        private var configurationSignature: String {
+            [
+                "nvcc=\(nvccPath ?? "")",
+                "ccbin=\(clangppPath ?? "")",
+                "std=\(std ?? "")",
+                "arch=\(ProcessInfo.processInfo.environment["CUDA_ARCH"] ?? "")",
+                "include=\(includeDirs.joined(separator: ":"))",
+            ].joined(separator: "\n")
+        }
+
+        private var stampURL: URL {
+            URL(fileURLWithPath: output + ".encuda-stamp")
+        }
+
+        private func writeStamp() {
+            try? configurationSignature.write(to: stampURL, atomically: true, encoding: .utf8)
         }
 
         private func isUpToDate() -> Bool {
             let fm = FileManager.default
             let outputURL = URL(fileURLWithPath: output)
+            guard let stamp = try? String(contentsOf: stampURL, encoding: .utf8),
+                stamp == configurationSignature
+            else { return false }
             guard fm.fileExists(atPath: output),
                 let outputMod =
                     (try? outputURL.resourceValues(forKeys: [.contentModificationDateKey]))?

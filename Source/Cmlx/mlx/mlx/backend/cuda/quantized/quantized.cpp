@@ -72,6 +72,7 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
         biases,
         std::nullopt,
         std::nullopt,
+        std::nullopt,
         out,
         transpose_,
         bits_,
@@ -84,7 +85,16 @@ void QuantizedMatmul::eval_gpu(const std::vector<array>& inputs, array& out) {
     if (can_use_fp_qmv) {
       fp_qmv(x, w, scales, out, bits_, group_size_, encoder, s);
     } else {
-      qmv(x, w, scales, biases, out, bits_, group_size_, mode_, encoder);
+      qmv(x,
+          w,
+          scales,
+          biases,
+          std::nullopt,
+          out,
+          bits_,
+          group_size_,
+          mode_,
+          encoder);
     }
   };
 
@@ -202,6 +212,7 @@ void GatherQMM::eval_gpu(const std::vector<array>& inputs, array& out) {
         w,
         scales,
         biases,
+        std::nullopt,
         lhs_indices,
         rhs_indices,
         out,

@@ -92,6 +92,15 @@ See <doc:wired-memory> for configuration, best practices, and policy guidance.
 
 - ``MLXArray``
 
+### Concurrency
+
+`MLXArray` is not `Sendable`.  To share an array or model across task and actor
+boundaries, take an evaluated, immutable snapshot.
+
+- ``MaterializedArray``
+- ``materialize(_:)->MaterializedArray``
+- ``materialize(_:)->[MaterializedArray]``
+
 ### Free Functions
 
 - <doc:free-functions>
@@ -109,6 +118,7 @@ See <doc:wired-memory> for configuration, best practices, and policy guidance.
 - ``DType``
 - ``HasDType``
 - ``ScalarOrArray``
+- ``NestedArrayElement``
 
 ### Parameter Types
 
@@ -129,3 +139,11 @@ See <doc:wired-memory> for configuration, best practices, and policy guidance.
 - ``Device``
 - ``DeviceType``
 - ``Stream``
+
+### Distributed
+
+- ``MLXDistributed``
+
+### Load Progress
+
+- ``LoadProgress``

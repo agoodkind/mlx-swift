@@ -18,6 +18,17 @@ private func shapePrecondition(shape: (some Collection<Int>)?, byteCount: Int, t
     }
 }
 
+// flatten a nested array into its shape and its scalars in row major order
+private func flattenNested<N: NestedArrayElement>(_ value: [[N]]) -> (
+    shape: [Int], values: [N.Scalar]
+) {
+    let shape = value.nestedShape
+    var values = [N.Scalar]()
+    values.reserveCapacity(shape.reduce(1, *))
+    value.appendNestedScalars(to: &values)
+    return (shape, values)
+}
+
 // holds reference to `finalizer` as capture state
 private class FinalizerCaptureState {
     let f: () -> Void
@@ -121,11 +132,11 @@ extension MLXArray {
     /// ```
     ///
     /// Note: if the value is out of bounds for an `Int32` the precondition will fail.  If you
-    /// need an `Int` (`Int64`) scalar, please use ``init(int64:)``.
+    /// need an `Int` (`Int64`) scalar, please use ``init(int64:)-(Int)``.
     ///
     /// ### See Also
     /// - <doc:initialization>
-    /// - ``init(int64:)``
+    /// - ``init(int64:)-(Int)``
     public convenience init(_ value: Int) {
         precondition(
             (Int(Int32.min) ... Int(Int32.max)).contains(value),
@@ -451,6 +462,78 @@ extension MLXArray {
         fatalError("unavailable")
     }
 
+    /// Initializer allowing creation of a multi dimensional `MLXArray` from a nested array of
+    /// `HasDType` values.
+    ///
+    /// The shape is inferred directly from the provided array. Note that the nesting must
+    /// be rectangular (all arrays of a given level must have the same count).
+    /// Failing to meet this constraint will hit a precondition failure.
+    ///
+    /// ```swift
+    /// // shape [2, 3]
+    /// let twoByThree = MLXArray([[1, 2, 3],
+    ///                            [4, 5, 6]])
+    ///
+    /// // shape [2, 2, 2] -- any depth of nesting works
+    /// let cube = MLXArray([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+    /// ```
+    ///
+    /// Note: as with the one dimensional initializers, `Int` values produce a ``DType/int32``
+    /// result and the precondition will fail if a value is out of bounds.  See
+    /// ``init(int64:)-([[N]])`` if `.int64` is required.
+    ///
+    /// ### See Also
+    /// - <doc:initialization>
+    /// - ``init(int64:)-([[N]])``
+    public convenience init<N: NestedArrayElement>(_ value: [[N]]) {
+        let (shape, values) = flattenNested(value)
+        if N.Scalar.self == Int.self {
+            // Similarly to the Sequence<Int> initializer below,
+            // having an override for Int is ambiguous so we
+            // do a runtime check and force it to the [Int] variant
+            self.init(values as! [Int], shape)
+        } else {
+            self.init(values, shape)
+        }
+    }
+
+    /// Initializer allowing creation of a multi dimensional `MLXArray` from a nested array of
+    /// `Int` as a `DType.int64`.
+    ///
+    /// ```swift
+    /// let a = MLXArray(int64: [[1, 2, 3], [4, 5, 6]])
+    /// ```
+    ///
+    /// Note ``init(_:)-([[N]])`` (producing an `int32` result) is preferred.
+    ///
+    /// ### See Also
+    /// - <doc:initialization>
+    /// - ``init(_:)-([[N]])``
+    public convenience init<N: NestedArrayElement>(int64 value: [[N]]) where N.Scalar == Int {
+        let (shape, values) = flattenNested(value)
+        self.init(int64: values, shape)
+    }
+
+    /// Initializer allowing creation of a multi dimensional `MLXArray` from a nested array of
+    /// `Double` values.
+    ///
+    /// Note: this converts the values to `Float`, matching ``init(converting:_:)``.  Unlike the
+    /// one dimensional case, ``init(_:)-([[N]])`` also accepts `[[Double]]` and produces a
+    /// ``DType/float64`` result.
+    ///
+    /// ```swift
+    /// let a = MLXArray(converting: [[0.5, 0.9], [1.5, 1.9]])
+    /// ```
+    ///
+    /// ### See Also
+    /// - <doc:initialization>
+    /// - ``init(_:)-([[N]])``
+    public convenience init<N: NestedArrayElement>(converting value: [[N]])
+    where N.Scalar == Double {
+        let (shape, values) = flattenNested(value)
+        self.init(converting: values, shape)
+    }
+
     /// Initializer allowing creation of `MLXArray` from a sequence of `HasDType` values with
     /// an optional shape.
     ///
@@ -599,40 +682,4 @@ extension MLXArray {
         self.init(real: value.real, imaginary: value.imaginary)
     }
 
-}
-
-// MARK: - Expressible by literals
-
-extension MLXArray: ExpressibleByArrayLiteral {
-
-    // Note: MLXArray does not implement ExpressibleByFloatLiteral etc. because
-    // we want to create arrays in the context of the other arrays.  For example:
-    //
-    // let x = MLXArray(1.5, dtype: .float16)
-    // let r = x + 2.5
-    //
-    // We expect r to have a dtype of float16.  See ``ScalarOrArray``.
-
-    /// Initializer allowing creation of 1d `MLXArray` from an array literal.
-    ///
-    /// ```swift
-    /// let a: MLXArray = [1, 2, 3]
-    /// ```
-    ///
-    /// This is convenient for methods that have `MLXArray` parameters:
-    ///
-    /// ```swift
-    /// print(array.take([1, 2, 3], axis: 0))
-    /// ```
-    ///
-    /// ### See Also
-    /// - <doc:initialization>
-    public convenience init(arrayLiteral elements: Int32...) {
-        let ctx = elements.withUnsafeBufferPointer { ptr in
-            let shape = [Int32(elements.count)]
-            return mlx_array_new_data(
-                ptr.baseAddress!, shape, Int32(shape.count), Int32.dtype.cmlxDtype)
-        }
-        self.init(ctx)
-    }
 }

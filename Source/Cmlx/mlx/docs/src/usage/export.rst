@@ -109,6 +109,35 @@ keyword arguments when calling the imported function.
   out, = imported_fun(x, z=y)
 
 
+Saving Metadata
+---------------
+
+You can save metadata, such as a model configuration, alongside an exported
+function. The metadata is a string, so structured data can be encoded with
+JSON:
+
+.. code-block:: python
+
+  import json
+
+  def fun(x, y):
+    return x + y
+
+  x = mx.array(1.0)
+  y = mx.array(1.0)
+  config = {"description": "adds two arrays", "version": 1}
+  mx.export_function("add.mlxfn", fun, x, y, metadata=json.dumps(config))
+
+Pass ``return_metadata=True`` to read the metadata back when importing:
+
+.. code-block:: python
+
+  imported_fun, metadata = mx.import_function("add.mlxfn", return_metadata=True)
+
+  # Prints: adds two arrays
+  print(json.loads(metadata)["description"])
+
+
 Exporting Modules
 -----------------
 
@@ -153,6 +182,34 @@ parameters, pass them as inputs to the ``call`` wrapper:
 
    params = tree_flatten(model.parameters(), destination={})
    mx.export_function("model.mlxfn", call, (mx.zeros(4),), params)
+
+
+Exporting with a Callback
+-------------------------
+
+To inspect the exported graph, you can pass a callback instead of a file path
+to :func:`export_function`.
+
+.. code-block:: python
+
+  def fun(x):
+    return x.astype(mx.int32)
+
+  def callback(args):
+    print(args)
+
+  mx.export_function(callback, fun, mx.array([1.0, 2.0]))
+
+The argument to the callback (``args``) is a dictionary which includes a
+``type`` field. The possible types are:
+
+* ``"inputs"``: The ordered positional inputs to the exported function
+* ``"keyword_inputs"``: The keyword specified inputs to the exported function
+* ``"outputs"``: The ordered outputs of the exported function
+* ``"constants"``: Any graph constants
+* ``"primitives"``: Inner graph nodes representating the operations
+
+Each type has additional fields in the ``args`` dictionary.
 
 
 Shapeless Exports

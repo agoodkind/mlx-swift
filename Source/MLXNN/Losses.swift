@@ -51,8 +51,8 @@ public func crossEntropy(
     if targets_as_probs {
         score = sum(logits * targets, axis: axis)
     } else {
-        score = takeAlong(logits, targets.expandedDimensions(axis: -1), axis: axis).squeezed(
-            axis: -1)
+        score = takeAlong(logits, targets.expandedDimensions(axis: axis), axis: axis).squeezed(
+            axis: axis)
     }
 
     let logSumExpLogits = logSumExp(logits, axis: axis)
@@ -164,8 +164,8 @@ public func mseLoss(predictions: MLXArray, targets: MLXArray, reduction: LossRed
 public func nllLoss(
     inputs: MLXArray, targets: MLXArray, axis: Int = -1, reduction: LossReduction = .none
 ) -> MLXArray {
-    let loss = -takeAlong(inputs, targets.expandedDimensions(axis: -1), axis: axis).squeezed(
-        axis: -1)
+    let loss = -takeAlong(inputs, targets.expandedDimensions(axis: axis), axis: axis).squeezed(
+        axis: axis)
     return reduction.reduce(loss: loss)
 }
 
@@ -226,7 +226,7 @@ public func smoothL1Loss(
 ///   - positives: positive samples
 ///   - negatives: negative samples
 ///   - axis: distribution axis
-///   - p: norm dree for pairwise distance
+///   - p: norm degree for pairwise distance
 ///   - margin: margin for the triplet loss
 ///   - eps: small positive constant to prevent numerical instability
 ///   - reduction: reduction type
@@ -238,13 +238,16 @@ public func tripletLoss(
     anchors: MLXArray, positives: MLXArray, negatives: MLXArray, axis: Int = -1, p: Int = 2,
     margin: Float = 1.0, eps: Float = 1e-6, reduction: LossReduction = .none
 ) -> MLXArray {
-    let loss = maximum(
-        sqrt(pow(anchors - positives, p).sum(axis: axis) + eps)
-            - sqrt(pow(anchors - negatives, p).sum(axis: axis) + eps)
-            + margin,
-        0
+    let positiveDistance = pow(
+        pow(abs(anchors - positives), p).sum(axis: axis) + eps,
+        1.0 / Float(p)
+    )
+    let negativeDistance = pow(
+        pow(abs(anchors - negatives), p).sum(axis: axis) + eps,
+        1.0 / Float(p)
     )
 
+    let loss = maximum(positiveDistance - negativeDistance + margin, 0)
     return reduction.reduce(loss: loss)
 }
 

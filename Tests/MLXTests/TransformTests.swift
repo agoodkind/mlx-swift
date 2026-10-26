@@ -10,7 +10,6 @@ import XCTest
 class TransformTests: XCTestCase {
 
     override class func setUp() {
-        setDefaultDevice()
     }
 
     func testEval() {
@@ -113,6 +112,7 @@ class TransformTests: XCTestCase {
     }
 
     func testCompile() {
+        @Sendable
         func f(inputs: [MLXArray]) -> [MLXArray] {
             [square(inputs[0] * inputs[1])]
         }
@@ -217,7 +217,70 @@ class TransformTests: XCTestCase {
         XCTAssertEqual(state.o!.item(Float.self), -8)
     }
 
+    // https://github.com/ml-explore/mlx-swift-lm/issues/586 --
+    // compile can capture Module parameters
+    class ScaleModule: Module, UnaryLayer {
+        var scale: MLXArray
+
+        init(_ value: Float) {
+            self.scale = MLXArray(value)
+        }
+
+        func callAsFunction(_ x: MLXArray) -> MLXArray {
+            x * scale
+        }
+    }
+
+    func testCompileCapturesModuleParameterWithoutState() {
+        // verify that compile captures all values used if not
+        // passed as inputs.
+
+        let model = ScaleModule(2.0)
+
+        // lie about the inputs so that we can use a non-Sendable
+        // closure.  this is meant to demonstrate the failure
+        let compiled = compile(inputs: []) { (x: MLXArray) -> MLXArray in
+            model(x)
+        }
+
+        let r1 = compiled(MLXArray(Float(3)))
+        XCTAssertEqual(r1.item(Float.self), 6)
+
+        // simulate a LoRA-style in place update of the module's weights
+        model.update(parameters: .unflattened([("scale", MLXArray(Float(10)))]))
+        eval(model)
+
+        // Verify capture of Module parameters -- it doesn't see the update
+        let r2 = compiled(MLXArray(Float(3)))
+        XCTAssertEqual(
+            r2.item(Float.self), 6,
+            "compiled function saw the update and it should not")
+    }
+
+    func testCompileWithStateObservesModuleParameterUpdates() {
+        // verify inputs correctly handles updated
+        // Module parameters
+
+        let model = ScaleModule(2.0)
+
+        let compiled = compile(inputs: [model]) { (x: MLXArray) -> MLXArray in
+            model(x)
+        }
+
+        let r1 = compiled(MLXArray(Float(3)))
+        XCTAssertEqual(r1.item(Float.self), 6)
+
+        // simulate a LoRA-style in place update of the module's weights
+        model.update(parameters: .unflattened([("scale", MLXArray(Float(10)))]))
+        eval(model)
+
+        // with state:, the compiled function observes the updated parameter
+        let r2 = compiled(MLXArray(Float(3)))
+        XCTAssertEqual(r2.item(Float.self), 30)
+    }
+
     func testCompiledRandom() {
+        @Sendable
         func f(_ bias: MLXArray) -> MLXArray {
             MLXRandom.uniform(0 ..< 1, [4]) + bias
         }
@@ -277,7 +340,26 @@ class TransformTests: XCTestCase {
         assertEqual(vf(x), expected)
     }
 
+    func testVmapSendableSimple() async {
+        @Sendable
+        func f(_ x: MLXArray) -> MLXArray { x * 2 }
+
+        let x = MLXArray(0 ..< 6, [3, 2])
+
+        // this result type is Sendable
+        let vf = vmapSendable(f)
+
+        let t = Task {
+            let expected = stacked((0 ..< 3).map { f(x[$0]) }, axis: 0)
+
+            assertEqual(vf(x), expected)
+        }
+
+        _ = await t.value
+    }
+
     func testVmapTwoInputs() {
+        @Sendable
         func f(_ x: MLXArray, _ y: MLXArray) -> MLXArray { x + y }
 
         let x = MLXArray(0 ..< 6, [3, 2])
@@ -290,6 +372,7 @@ class TransformTests: XCTestCase {
     }
 
     func testVmapAxisPermutations() {
+        @Sendable
         func f(_ x: MLXArray) -> MLXArray { x * 2 }
 
         let x = MLXArray(0 ..< 6, [2, 3])
@@ -308,6 +391,7 @@ class TransformTests: XCTestCase {
     }
 
     func testVmapTwoInputsAxisPermutations() {
+        @Sendable
         func f(_ x: MLXArray, _ y: MLXArray) -> MLXArray { x + y }
 
         let x = MLXArray(0 ..< 6, [2, 3])
@@ -323,6 +407,7 @@ class TransformTests: XCTestCase {
     }
 
     func testVmapWithCompile() {
+        @Sendable
         func f(_ x: MLXArray) -> MLXArray { x.square() }
 
         let x = MLXRandom.normal([4, 2])
@@ -331,7 +416,9 @@ class TransformTests: XCTestCase {
         let mapCompile = vmap(compiled)
         assertEqual(mapCompile(x), vmap(f)(x))
 
-        let compiledMap = compile(vmap(f))
+        // use a non-Sendable version of compile because vmap doesn't produce
+        // a Sendable function
+        let compiledMap = compile(inputs: [], vmap(f))
         assertEqual(compiledMap(x), vmap(f)(x))
     }
 
@@ -350,6 +437,7 @@ class TransformTests: XCTestCase {
 
     func testCompileThreadSafety() async throws {
 
+        @Sendable
         func swiglu(_ xLinear: MLXArray, _ xGlu: MLXArray, alpha: Float = 1.702, limit: Float = 7.0)
             -> MLXArray
         {
@@ -471,6 +559,76 @@ class TransformTests: XCTestCase {
         ) { error in
             XCTAssertTrue(error is MLXError, "expected MLXError, got \(error)")
         }
+    }
+
+    func testCustomFunctionVJP2() {
+        // Custom function with 2-parameter VJP: (primals, cotangents)
+        let customSquare = CustomFunction {
+            Forward { inputs in
+                [inputs[0].square()]
+            }
+            VJP { primals, cotangents in
+                // d/dx(x^2) = 2 * x, so cotangent * 2 * x
+                [cotangents[0] * 2 * primals[0]]
+            }
+        }
+
+        let x = MLXArray(3.0)
+        let forwardOut = customSquare([x])
+        assertEqual(forwardOut[0], MLXArray(9.0))
+
+        let gradFn = grad { inputs in
+            customSquare(inputs)
+        }
+        let grads = gradFn([x])
+        assertEqual(grads[0], MLXArray(6.0))
+    }
+
+    func testCustomFunctionVJP3WithOutputs() {
+        // Custom function with 3-parameter VJP: (primals, cotangents, outputs)
+        // For sigmoid: s(x) = output, and ds/dx = s * (1 - s) = output * (1 - output)
+        // This directly exercises the 3rd parameter `outputs`
+        let customSigmoid = CustomFunction {
+            Forward { inputs in
+                [sigmoid(inputs[0])]
+            }
+            VJP { primals, cotangents, outputs in
+                let out = outputs[0]
+                return [cotangents[0] * out * (1 - out)]
+            }
+        }
+
+        let x = MLXArray(0.0)
+        let forwardOut = customSigmoid([x])
+        assertEqual(forwardOut[0], MLXArray(0.5))
+
+        let gradFn = grad { inputs in
+            customSigmoid(inputs)
+        }
+        let grads = gradFn([x])
+        // At x = 0, sigmoid(0) = 0.5, grad = 0.5 * (1 - 0.5) = 0.25
+        assertEqual(grads[0], MLXArray(0.25))
+    }
+
+    func testCustomFunctionSendable() async {
+        // Verify Sendable closures and Sendable return from CustomFunction
+        let fn: @Sendable ([MLXArray]) -> [MLXArray] = CustomFunction {
+            Forward { inputs in
+                [inputs[0] + 1]
+            }
+            VJP { primals, cotangents, outputs in
+                [cotangents[0]]
+            }
+        }
+
+        // CustomFunction result is @Sendable and can be transferred across Task boundaries
+        let val = await Task { @Sendable in
+            let input = MLXArray(5.0)
+            let result = fn([input])
+            return result[0].item(Float.self)
+        }.value
+
+        XCTAssertEqual(val, 6.0)
     }
 
 }
